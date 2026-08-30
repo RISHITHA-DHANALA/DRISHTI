@@ -1,17 +1,7 @@
 """
 db/database.py
----------------
+--------------
 SQLite persistence layer for DRISHTI-XAI.
-
-Supports:
-- Users
-- Health Workers
-- Doctors
-- Patients
-- Screening records
-- Doctor review
-- Doctor recommendations
-- Follow-up tracking
 """
 
 import sqlite3
@@ -20,11 +10,7 @@ import datetime
 import sys
 import os
 
-sys.path.append(
-    os.path.dirname(
-        os.path.dirname(os.path.abspath(__file__))
-    )
-)
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import DB_PATH, DEMO_USERS
 
@@ -37,29 +23,15 @@ def _connect():
 
 
 def _hash_password(password: str) -> str:
-    return hashlib.sha256(
-        password.encode("utf-8")
-    ).hexdigest()
+    return hashlib.sha256(password.encode("utf-8")).hexdigest()
 
 
-def _column_exists(conn, table_name, column_name):
-    cur = conn.cursor()
-
-    cur.execute(
-        f"PRAGMA table_info({table_name})"
-    )
-
-    columns = [
-        row["name"]
-        for row in cur.fetchall()
-    ]
-
-    return column_name in columns
+def _column_exists(cur, table, column):
+    cur.execute(f"PRAGMA table_info({table})")
+    return any(row[1] == column for row in cur.fetchall())
 
 
 def init_db():
-    """Create tables and upgrade older databases."""
-
     conn = _connect()
     cur = conn.cursor()
 
@@ -71,8 +43,7 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT UNIQUE NOT NULL,
             password_hash TEXT NOT NULL,
-            role TEXT NOT NULL
-                CHECK(role IN ('Health Worker', 'Doctor')),
+            role TEXT NOT NULL CHECK(role IN ('Health Worker', 'Doctor')),
             display_name TEXT NOT NULL
         )
     """)
@@ -110,65 +81,57 @@ def init_db():
             screened_by TEXT,
             screened_at TEXT NOT NULL,
 
-            doctor_review TEXT,
-            doctor_name TEXT,
-            doctor_advice TEXT,
+            doctor_decision TEXT,
+            specialist_exam TEXT,
+            blood_sugar_advice TEXT,
+            bp_cholesterol_advice TEXT,
+            diet_lifestyle_advice TEXT,
+            warning_signs_advice TEXT,
+            followup_advice TEXT,
+            additional_doctor_advice TEXT,
+            reviewed_by TEXT,
             reviewed_at TEXT,
 
-            FOREIGN KEY(patient_id)
-                REFERENCES patients(id)
+            FOREIGN KEY(patient_id) REFERENCES patients(id)
         )
     """)
 
-    conn.commit()
-
     # ---------------------------------------------------------
-    # DATABASE MIGRATION
+    # SAFE MIGRATION FOR EXISTING DATABASES
     # ---------------------------------------------------------
     new_columns = {
-        "doctor_review": "TEXT",
-        "doctor_name": "TEXT",
-        "doctor_advice": "TEXT",
+        "doctor_decision": "TEXT",
+        "specialist_exam": "TEXT",
+        "blood_sugar_advice": "TEXT",
+        "bp_cholesterol_advice": "TEXT",
+        "diet_lifestyle_advice": "TEXT",
+        "warning_signs_advice": "TEXT",
+        "followup_advice": "TEXT",
+        "additional_doctor_advice": "TEXT",
+        "reviewed_by": "TEXT",
         "reviewed_at": "TEXT",
     }
 
-    for column, definition in new_columns.items():
-
-        if not _column_exists(
-            conn,
-            "screenings",
-            column
-        ):
+    for column, datatype in new_columns.items():
+        if not _column_exists(cur, "screenings", column):
             cur.execute(
-                f"""
-                ALTER TABLE screenings
-                ADD COLUMN {column} {definition}
-                """
+                f"ALTER TABLE screenings ADD COLUMN {column} {datatype}"
             )
-
-    conn.commit()
 
     # ---------------------------------------------------------
     # DEMO USERS
     # ---------------------------------------------------------
     for username, password, role, display_name in DEMO_USERS:
-
         cur.execute(
             "SELECT id FROM users WHERE username = ?",
             (username,)
         )
 
         if cur.fetchone() is None:
-
             cur.execute(
                 """
                 INSERT INTO users
-                (
-                    username,
-                    password_hash,
-                    role,
-                    display_name
-                )
+                (username, password_hash, role, display_name)
                 VALUES (?, ?, ?, ?)
                 """,
                 (
@@ -183,115 +146,77 @@ def init_db():
     conn.close()
 
 
-def authenticate(username: str, password: str):
+# =============================================================
+# USERS
+# =============================================================
 
+def authenticate(username: str, password: str):
     conn = _connect()
     cur = conn.cursor()
 
     cur.execute(
-        """
-        SELECT *
-        FROM users
-        WHERE username = ?
-        """,
+        "SELECT * FROM users WHERE username = ?",
         (username,)
     )
 
     row = cur.fetchone()
-
     conn.close()
 
-    if row:
-
-        if row["password_hash"] == _hash_password(password):
-            return dict(row)
+    if row and row["password_hash"] == _hash_password(password):
+        return dict(row)
 
     return None
 
 
-def register_user(
-    username,
-    password,
-    role,
-    display_name
-):
-    """Register a new Health Worker or Doctor."""
-
+def add_doctor(username, password, display_name):
     conn = _connect()
     cur = conn.cursor()
 
     try:
-
         cur.execute(
             """
             INSERT INTO users
-            (
-                username,
-                password_hash,
-                role,
-                display_name
-            )
-            VALUES (?, ?, ?, ?)
+            (username, password_hash, role, display_name)
+            VALUES (?, ?, 'Doctor', ?)
             """,
             (
                 username,
                 _hash_password(password),
-                role,
                 display_name,
             ),
         )
 
         conn.commit()
-
-        new_id = cur.lastrowid
-
+        doctor_id = cur.lastrowid
         conn.close()
 
-        return new_id
+        return doctor_id
 
     except sqlite3.IntegrityError:
-
         conn.close()
-
         return None
 
 
-def get_users(role=None):
-
+def get_doctors():
     conn = _connect()
     cur = conn.cursor()
 
-    if role:
+    cur.execute("""
+        SELECT id, username, display_name
+        FROM users
+        WHERE role = 'Doctor'
+        ORDER BY display_name
+    """)
 
-        cur.execute(
-            """
-            SELECT *
-            FROM users
-            WHERE role = ?
-            ORDER BY display_name
-            """,
-            (role,)
-        )
-
-    else:
-
-        cur.execute(
-            """
-            SELECT *
-            FROM users
-            ORDER BY display_name
-            """
-        )
-
-    rows = [
-        dict(row)
-        for row in cur.fetchall()
-    ]
-
+    rows = [dict(r) for r in cur.fetchall()]
     conn.close()
 
     return rows
 
+
+# =============================================================
+# PATIENTS
+# =============================================================
 
 def add_patient(
     patient_code,
@@ -301,12 +226,10 @@ def add_patient(
     previous_screening,
     registered_by
 ):
-
     conn = _connect()
     cur = conn.cursor()
 
     try:
-
         cur.execute(
             """
             INSERT INTO patients
@@ -335,63 +258,50 @@ def add_patient(
         )
 
         conn.commit()
-
         new_id = cur.lastrowid
-
         conn.close()
 
         return new_id
 
     except sqlite3.IntegrityError:
-
         conn.close()
-
         return None
 
 
 def get_patients():
-
     conn = _connect()
     cur = conn.cursor()
 
-    cur.execute(
-        """
+    cur.execute("""
         SELECT *
         FROM patients
         ORDER BY registered_at DESC
-        """
-    )
+    """)
 
-    rows = [
-        dict(row)
-        for row in cur.fetchall()
-    ]
-
+    rows = [dict(r) for r in cur.fetchall()]
     conn.close()
 
     return rows
 
 
 def get_patient_by_id(patient_id):
-
     conn = _connect()
     cur = conn.cursor()
 
     cur.execute(
-        """
-        SELECT *
-        FROM patients
-        WHERE id = ?
-        """,
+        "SELECT * FROM patients WHERE id = ?",
         (patient_id,)
     )
 
     row = cur.fetchone()
-
     conn.close()
 
     return dict(row) if row else None
 
+
+# =============================================================
+# SCREENINGS
+# =============================================================
 
 def add_screening(
     patient_id,
@@ -403,7 +313,6 @@ def add_screening(
     heatmap_path,
     screened_by
 ):
-
     conn = _connect()
     cur = conn.cursor()
 
@@ -441,142 +350,130 @@ def add_screening(
     )
 
     conn.commit()
-
     new_id = cur.lastrowid
-
     conn.close()
 
     return new_id
 
 
 def get_screenings():
-
     conn = _connect()
     cur = conn.cursor()
 
-    cur.execute(
-        """
+    cur.execute("""
         SELECT
             s.*,
-
             p.patient_code,
             p.name AS patient_name,
             p.age,
             p.diabetes_duration,
             p.previous_screening
-
         FROM screenings s
-
         JOIN patients p
-            ON s.patient_id = p.id
-
+        ON s.patient_id = p.id
         ORDER BY s.screened_at DESC
-        """
-    )
+    """)
 
-    rows = [
-        dict(row)
-        for row in cur.fetchall()
-    ]
-
+    rows = [dict(r) for r in cur.fetchall()]
     conn.close()
 
     return rows
 
 
 def get_screening_by_id(screening_id):
-
     conn = _connect()
     cur = conn.cursor()
 
-    cur.execute(
-        """
+    cur.execute("""
         SELECT
             s.*,
-
             p.patient_code,
             p.name AS patient_name,
             p.age,
             p.diabetes_duration,
-            p.previous_screening
-
+            p.previous_screening,
+            p.registered_by,
+            p.registered_at
         FROM screenings s
-
         JOIN patients p
-            ON s.patient_id = p.id
-
+        ON s.patient_id = p.id
         WHERE s.id = ?
-        """,
-        (screening_id,)
-    )
+    """, (screening_id,))
 
     row = cur.fetchone()
-
     conn.close()
 
     return dict(row) if row else None
 
 
-def update_doctor_review(
-    screening_id,
-    doctor_name,
-    doctor_review,
-    doctor_advice
-):
-
+def update_followup_status(screening_id, status):
     conn = _connect()
     cur = conn.cursor()
 
     cur.execute(
         """
         UPDATE screenings
+        SET followup_status = ?
+        WHERE id = ?
+        """,
+        (status, screening_id)
+    )
 
+    conn.commit()
+    conn.close()
+
+
+# =============================================================
+# DOCTOR REVIEW
+# =============================================================
+
+def save_doctor_review(
+    screening_id,
+    doctor_decision,
+    specialist_exam,
+    blood_sugar_advice,
+    bp_cholesterol_advice,
+    diet_lifestyle_advice,
+    warning_signs_advice,
+    followup_advice,
+    additional_doctor_advice,
+    reviewed_by
+):
+    conn = _connect()
+    cur = conn.cursor()
+
+    cur.execute(
+        """
+        UPDATE screenings
         SET
-            doctor_review = ?,
-            doctor_name = ?,
-            doctor_advice = ?,
+            doctor_decision = ?,
+            specialist_exam = ?,
+            blood_sugar_advice = ?,
+            bp_cholesterol_advice = ?,
+            diet_lifestyle_advice = ?,
+            warning_signs_advice = ?,
+            followup_advice = ?,
+            additional_doctor_advice = ?,
+            reviewed_by = ?,
             reviewed_at = ?
-
         WHERE id = ?
         """,
         (
-            doctor_review,
-            doctor_name,
-            doctor_advice,
+            doctor_decision,
+            specialist_exam,
+            blood_sugar_advice,
+            bp_cholesterol_advice,
+            diet_lifestyle_advice,
+            warning_signs_advice,
+            followup_advice,
+            additional_doctor_advice,
+            reviewed_by,
             datetime.datetime.now().isoformat(
                 timespec="seconds"
             ),
             screening_id,
-        ),
+        )
     )
 
     conn.commit()
-
-    conn.close()
-
-
-def update_followup_status(
-    screening_id,
-    status
-):
-
-    conn = _connect()
-    cur = conn.cursor()
-
-    cur.execute(
-        """
-        UPDATE screenings
-
-        SET followup_status = ?
-
-        WHERE id = ?
-        """,
-        (
-            status,
-            screening_id,
-        ),
-    )
-
-    conn.commit()
-
     conn.close()
