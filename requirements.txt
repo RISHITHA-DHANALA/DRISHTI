@@ -3,7 +3,7 @@ opencv-python-headless>=4.9.0
 numpy>=1.26.0
 pandas>=2.2.0
 Pillow>=10.2.0
-
+fpdf2>=2.7.0
 # Optional — only needed if you plug in a real trained model.
 # Uncomment the one matching your model format.
 # tensorflow>=2.15.0
