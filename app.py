@@ -21,7 +21,10 @@ diagnosis or care decisions.
 
 import os
 import sys
+import base64
+from datetime import datetime
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 from PIL import Image
 
@@ -134,6 +137,119 @@ def reset_workflow():
     for key in ["wf_image_bgr", "wf_image_source", "wf_quality", "wf_prediction",
                 "wf_heatmap", "wf_risk", "wf_patient_id"]:
         st.session_state[key] = None
+
+
+# ---------------------------------------------------------------------------
+# Report generation (print / download)
+# ---------------------------------------------------------------------------
+def build_report_html(row):
+    """
+    Builds a self-contained, print-friendly HTML patient screening report
+    from a screening row (as returned by get_screenings()/get_patients()).
+    Uses .get() everywhere so it never breaks if a field is missing.
+    """
+    patient_code = row.get("patient_code", "N/A")
+    patient_name = row.get("patient_name", "N/A")
+    age = row.get("age", "N/A")
+    dr_class = row.get("dr_class", "N/A")
+    confidence = row.get("confidence", "N/A")
+    risk_level = row.get("risk_level", "N/A")
+    referral = row.get("referral", "N/A")
+    followup_status = row.get("followup_status", "N/A")
+    screened_by = row.get("screened_by", "N/A")
+    screened_at = row.get("screened_at", "N/A")
+    diabetes_duration = row.get("diabetes_duration", "N/A")
+    previous_screening = row.get("previous_screening", "N/A")
+    rationale = row.get("rationale")
+    rationale_html = ""
+    if rationale:
+        if isinstance(rationale, (list, tuple)):
+            rationale_html = "<ul>" + "".join(f"<li>{r}</li>" for r in rationale) + "</ul>"
+        else:
+            rationale_html = f"<p>{rationale}</p>"
+
+    generated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    html = f"""
+    <html>
+    <head>
+    <meta charset="utf-8">
+    <title>DRISHTI-XAI Report — {patient_code}</title>
+    <style>
+        body {{ font-family: Arial, Helvetica, sans-serif; color: #10243E; padding: 28px; }}
+        h1 {{ color: #10243E; margin-bottom: 0; }}
+        h2 {{ color: #0B7285; border-bottom: 1px solid #E3E8EF; padding-bottom: 6px; margin-top: 26px; }}
+        .tagline {{ color: #607D8B; margin-top: 2px; }}
+        table {{ width: 100%; border-collapse: collapse; margin-top: 8px; }}
+        td {{ padding: 6px 4px; vertical-align: top; }}
+        td.label {{ font-weight: bold; width: 220px; color: #10243E; }}
+        .disclaimer {{
+            background: #FFF7E6; border: 1px solid #FFD98E; color: #8A5A00;
+            padding: 12px 16px; border-radius: 8px; margin-top: 26px; font-size: 13px;
+        }}
+        .footer {{ margin-top: 18px; font-size: 11px; color: #90A4AE; }}
+    </style>
+    </head>
+    <body>
+        <h1>👁️ DRISHTI-XAI</h1>
+        <p class="tagline">Explainable AI Diabetic Retinopathy Screening for Rural India</p>
+
+        <h2>Patient Information</h2>
+        <table>
+            <tr><td class="label">Patient ID</td><td>{patient_code}</td></tr>
+            <tr><td class="label">Name</td><td>{patient_name}</td></tr>
+            <tr><td class="label">Age</td><td>{age}</td></tr>
+            <tr><td class="label">Diabetes Duration</td><td>{diabetes_duration}</td></tr>
+            <tr><td class="label">Previous Screening</td><td>{previous_screening}</td></tr>
+        </table>
+
+        <h2>Screening Result</h2>
+        <table>
+            <tr><td class="label">Screened At</td><td>{screened_at}</td></tr>
+            <tr><td class="label">Screened By</td><td>{screened_by}</td></tr>
+            <tr><td class="label">DR Class</td><td>{dr_class}</td></tr>
+            <tr><td class="label">AI Confidence</td><td>{confidence}%</td></tr>
+            <tr><td class="label">Risk Level</td><td>{risk_level}</td></tr>
+            <tr><td class="label">Referral Recommendation</td><td>{referral}</td></tr>
+        </table>
+        {f"<h2>Risk Rationale</h2>{rationale_html}" if rationale_html else ""}
+
+        <h2>Follow-up Status</h2>
+        <p>{followup_status}</p>
+
+        <div class="disclaimer">
+            ⚠️ PROTOTYPE — AI-assisted screening aid only. Not a certified medical
+            diagnostic device and not an official medical certificate. Clinical
+            decisions must be made by a qualified specialist.
+        </div>
+        <div class="footer">Report generated on {generated_at} by DRISHTI-XAI.</div>
+    </body>
+    </html>
+    """
+    return html
+
+
+def render_report_actions(row, key_prefix="report"):
+    """Renders a Print button and a Download button for a screening's report."""
+    html = build_report_html(row)
+    col_print, col_download = st.columns(2)
+
+    with col_print:
+        if st.button("🖨️ Print Report", key=f"{key_prefix}_print_{row.get('id')}", use_container_width=True):
+            st.caption("Print preview below — use your browser's print dialog (Ctrl/Cmd+P) or the "
+                       "button inside the preview.")
+            components.html(html + "<script>window.print();</script>", height=500, scrolling=True)
+
+    with col_download:
+        b64 = base64.b64encode(html.encode("utf-8")).decode()
+        st.markdown(
+            f'<a download="drishti_report_{row.get("patient_code","patient")}.html" '
+            f'href="data:text/html;base64,{b64}" '
+            f'style="display:inline-block;width:100%;text-align:center;padding:0.5rem 1rem;'
+            f'background:#0B7285;color:white;border-radius:8px;text-decoration:none;font-weight:600;">'
+            f'⬇️ Download Report (.html)</a>',
+            unsafe_allow_html=True,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -413,6 +529,29 @@ def page_screening():
             screened_by=st.session_state.user["display_name"],
         )
         st.success(t("saved_success", lang))
+
+        # Offer an immediate print/download report for the screening just saved.
+        st.markdown("<div class='drishti-card'>", unsafe_allow_html=True)
+        st.markdown("#### 📄 Screening Report")
+        report_row = {
+            "id": f"just_saved_{patient_id}",
+            "patient_code": patient["patient_code"],
+            "patient_name": patient["name"],
+            "age": patient["age"],
+            "diabetes_duration": patient["diabetes_duration"],
+            "previous_screening": patient["previous_screening"],
+            "dr_class": prediction["dr_class"],
+            "confidence": prediction["confidence"],
+            "risk_level": risk["risk_level"],
+            "referral": risk["referral"],
+            "rationale": risk.get("rationale"),
+            "followup_status": "Pending",
+            "screened_by": st.session_state.user["display_name"],
+            "screened_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        render_report_actions(report_row, key_prefix="save")
+        st.markdown("</div>", unsafe_allow_html=True)
+
         reset_workflow()
         st.session_state.wf_patient_id = patient_id
 
@@ -466,6 +605,18 @@ def page_dashboard():
             "screened_at": "Screened At",
         })
         st.dataframe(show_df, use_container_width=True, hide_index=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+
+        # --- Print / Download report for any screening -----------------------
+        st.markdown("<div class='drishti-card'>", unsafe_allow_html=True)
+        st.markdown("##### 📄 Patient Report")
+        screening_labels = {
+            f"{row['patient_code']} — {row['patient_name']} — {row['screened_at']}": row
+            for row in screenings
+        }
+        chosen_report_label = st.selectbox("Select a screening to print or download", list(screening_labels.keys()))
+        chosen_row = screening_labels[chosen_report_label]
+        render_report_actions(chosen_row, key_prefix="dash")
         st.markdown("</div>", unsafe_allow_html=True)
 
     # --- Follow-up tracking tab -----------------------------------------------
