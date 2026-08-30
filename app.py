@@ -1,70 +1,31 @@
 """
-app.py
-------
-DRISHTI-XAI — Explainable AI Diabetic Retinopathy Screening
+DRISHTI-XAI
+-----------
+Explainable AI Diabetic Retinopathy Screening
 for Rural India
 
-Main Streamlit entry point.
+SIH 2026 Prototype
 
-Workflow:
-    Login
-      ↓
-    Patient Registration
-      ↓
-    Fundus Image Upload
-      ↓
-    Image Quality Check
-      ↓
-    DR Prediction
-      ↓
-    Explainable AI / Grad-CAM
-      ↓
-    Risk Assessment
-      ↓
-    Smart Referral
-      ↓
-    Doctor Dashboard
-      ↓
-    Follow-up Tracking
-
-Run with:
-    streamlit run app.py
-
-*** PROTOTYPE DISCLAIMER ***
-This application is an AI-ASSISTED SCREENING PROTOTYPE built for
-a hackathon (SIH 2026) context.
-
-It is NOT a certified medical device and has NOT undergone
-clinical validation.
-
-Do not use it for real patient diagnosis or treatment decisions.
+DISCLAIMER:
+This is an AI-assisted screening prototype.
+It is NOT a certified medical diagnostic device.
 """
 
 import os
 import sys
+import html
+import base64
+from io import BytesIO
 
 import streamlit as st
 import pandas as pd
-
 from PIL import Image
 
-
-# ============================================================================
-# PATH SETUP
-# ============================================================================
-
 sys.path.append(
-    os.path.dirname(
-        os.path.abspath(__file__)
-    )
+    os.path.dirname(os.path.abspath(__file__))
 )
 
-
-# ============================================================================
-# PROJECT IMPORTS
-# ============================================================================
-
-from config import (  # noqa: E402
+from config import (
     APP_NAME,
     APP_TAGLINE,
     IS_PROTOTYPE,
@@ -75,30 +36,34 @@ from config import (  # noqa: E402
     DATA_DIR,
 )
 
-from i18n.translations import t  # noqa: E402
+from i18n.translations import t
 
-from db.database import (  # noqa: E402
+from db.database import (
     init_db,
     authenticate,
+    add_doctor,
+    get_doctors,
     add_patient,
     get_patients,
     get_patient_by_id,
     add_screening,
     get_screenings,
+    get_screening_by_id,
     update_followup_status,
+    save_doctor_review,
 )
 
-from core.image_quality import check_image_quality  # noqa: E402
-from core.model import DRModel  # noqa: E402
-from core.gradcam import generate_explanation  # noqa: E402
-from core.risk_engine import assess_risk  # noqa: E402
+from core.image_quality import check_image_quality
+from core.model import DRModel
+from core.gradcam import generate_explanation
+from core.risk_engine import assess_risk
 
-from utils.demo_data import (  # noqa: E402
+from utils.demo_data import (
     generate_all_samples,
     seed_demo_patients,
 )
 
-from utils.helpers import (  # noqa: E402
+from utils.helpers import (
     pil_to_bgr,
     bgr_to_rgb,
     save_uploaded_image,
@@ -107,9 +72,9 @@ from utils.helpers import (  # noqa: E402
 )
 
 
-# ============================================================================
-# DIRECTORIES
-# ============================================================================
+# ============================================================
+# PATHS
+# ============================================================
 
 UPLOAD_DIR = os.path.join(
     DATA_DIR,
@@ -121,10 +86,44 @@ HEATMAP_DIR = os.path.join(
     "heatmaps"
 )
 
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+os.makedirs(HEATMAP_DIR, exist_ok=True)
 
-# ============================================================================
+
+# ============================================================
+# DATABASE / MODEL
+# ============================================================
+
+@st.cache_resource
+def bootstrap():
+
+    init_db()
+
+    try:
+        generate_all_samples()
+    except Exception:
+        pass
+
+    try:
+        seed_demo_patients()
+    except Exception:
+        pass
+
+    return True
+
+
+@st.cache_resource
+def load_model():
+    return DRModel()
+
+
+bootstrap()
+dr_model = load_model()
+
+
+# ============================================================
 # PAGE CONFIG
-# ============================================================================
+# ============================================================
 
 st.set_page_config(
     page_title=APP_NAME,
@@ -134,98 +133,51 @@ st.set_page_config(
 )
 
 
-# ============================================================================
-# APPLICATION BOOTSTRAP
-# ============================================================================
-
-@st.cache_resource
-def bootstrap():
-    """
-    Initialize database and demo data.
-    """
-    init_db()
-    generate_all_samples()
-    seed_demo_patients()
-
-    return True
-
-
-@st.cache_resource
-def load_model():
-    """
-    Load and cache the DR model.
-    """
-    return DRModel()
-
-
-bootstrap()
-
-dr_model = load_model()
-
-
-# ============================================================================
-# HOSPITAL / MEDICAL UI THEME
-# ============================================================================
+# ============================================================
+# CUSTOM CSS
+# ============================================================
 
 st.markdown(
     """
 <style>
 
 /* =========================================================
-   GLOBAL COLORS
+   GLOBAL
    ========================================================= */
 
 :root {
     --navy: #0B1F3A;
+    --blue: #1976D2;
     --teal: #008C95;
-    --teal-dark: #006B73;
-    --teal-light: #E8F6F7;
-    --background: #F4F8FA;
-    --white: #FFFFFF;
-    --text: #263238;
-    --muted: #607D8B;
-    --border: #D9E3E8;
-    --warning: #D97706;
-    --danger: #C62828;
-    --success: #16803C;
+    --teal-light: #E8F7F8;
+    --border: #D9E2EC;
+    --card-light: #FFFFFF;
 }
 
 
-/* =========================================================
-   MAIN BACKGROUND
-   ========================================================= */
+/* Main background */
 
 .stApp {
-    background-color: var(--background);
+    background:
+        radial-gradient(
+            circle at 10% 10%,
+            rgba(0, 140, 149, 0.07),
+            transparent 28%
+        ),
+        radial-gradient(
+            circle at 90% 20%,
+            rgba(25, 118, 210, 0.07),
+            transparent 30%
+        );
 }
 
 
-/* =========================================================
-   MAIN CONTENT
-   ========================================================= */
-
-.main {
-    background-color: var(--background) !important;
-}
-
+/* Main content */
 
 .block-container {
     padding-top: 1.5rem;
     padding-bottom: 3rem;
-}
-
-
-/* =========================================================
-   HEADINGS
-   ========================================================= */
-
-h1,
-h2,
-h3,
-h4,
-h5,
-h6 {
-    color: var(--navy) !important;
+    max-width: 1450px;
 }
 
 
@@ -234,406 +186,292 @@ h6 {
    ========================================================= */
 
 section[data-testid="stSidebar"] {
-    background-color: var(--navy) !important;
+    background:
+        linear-gradient(
+            180deg,
+            #071A2D 0%,
+            #0B3048 55%,
+            #073B4C 100%
+        );
 }
-
 
 section[data-testid="stSidebar"] * {
     color: #FFFFFF !important;
 }
 
-
 section[data-testid="stSidebar"] hr {
-    border-color: rgba(255,255,255,0.20) !important;
-}
-
-
-/* Sidebar select boxes */
-
-section[data-testid="stSidebar"]
-div[data-baseweb="select"] {
-    background-color: #FFFFFF !important;
-}
-
-
-section[data-testid="stSidebar"]
-div[data-baseweb="select"] * {
-    color: #263238 !important;
+    border-color: rgba(255,255,255,0.16);
 }
 
 
 /* =========================================================
-   DRISHTI CARD
+   HEADINGS
+   ========================================================= */
+
+h1 {
+    font-weight: 800 !important;
+    letter-spacing: -0.5px;
+}
+
+h2 {
+    font-weight: 750 !important;
+}
+
+h3 {
+    font-weight: 700 !important;
+}
+
+
+/* =========================================================
+   MEDICAL CARDS
    ========================================================= */
 
 .drishti-card {
-    background-color: var(--white) !important;
-
-    border: 1px solid var(--border) !important;
-
-    border-radius: 14px !important;
-
-    padding: 20px 22px !important;
-
-    margin-bottom: 16px !important;
-
+    padding: 22px;
+    border-radius: 18px;
+    border: 1px solid var(--border);
+    background: var(--card-light);
+    margin-bottom: 18px;
     box-shadow:
-        0 2px 8px rgba(11,31,58,0.05) !important;
-
-    color: var(--text) !important;
-}
-
-
-/* Text inside cards */
-
-.drishti-card p,
-.drishti-card span,
-.drishti-card label,
-.drishti-card strong {
-    color: var(--text) !important;
-}
-
-
-/* Card headings */
-
-.drishti-card h1,
-.drishti-card h2,
-.drishti-card h3,
-.drishti-card h4,
-.drishti-card h5,
-.drishti-card h6 {
-    color: var(--navy) !important;
+        0 8px 28px rgba(11,31,58,0.07);
+    animation: cardEnter 0.55s ease;
 }
 
 
 /* =========================================================
-   METRIC CARDS
+   ANIMATION
    ========================================================= */
 
-div[data-testid="stMetric"] {
-    background-color: #FFFFFF !important;
+@keyframes cardEnter {
 
-    border: 1px solid var(--border) !important;
+    from {
+        opacity: 0;
+        transform: translateY(12px);
+    }
 
-    border-radius: 14px !important;
-
-    padding: 16px !important;
-
-    box-shadow:
-        0 2px 8px rgba(11,31,58,0.05) !important;
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
 }
 
 
-div[data-testid="stMetric"] label,
-div[data-testid="stMetric"] label *,
-div[data-testid="stMetric"] [data-testid="stMetricValue"],
-div[data-testid="stMetric"] [data-testid="stMetricValue"] * {
-    color: var(--navy) !important;
-}
+@keyframes pulse {
 
+    0% {
+        box-shadow:
+            0 0 0 0 rgba(0,140,149,0.25);
+    }
 
-div[data-testid="stMetric"] [data-testid="stMetricDelta"] {
-    color: var(--teal-dark) !important;
+    70% {
+        box-shadow:
+            0 0 0 12px rgba(0,140,149,0);
+    }
+
+    100% {
+        box-shadow:
+            0 0 0 0 rgba(0,140,149,0);
+    }
 }
 
 
 /* =========================================================
-   PRIMARY BUTTONS
+   HERO
    ========================================================= */
 
-.stButton > button[kind="primary"],
-button[data-testid="baseButton-primary"] {
-    background-color: var(--teal) !important;
+.hero {
+    padding: 30px;
+    border-radius: 22px;
+    margin-bottom: 25px;
 
-    color: #FFFFFF !important;
-
-    border: none !important;
-
-    border-radius: 9px !important;
-
-    font-weight: 600 !important;
-
-    padding: 0.55rem 1rem !important;
-}
-
-
-.stButton > button[kind="primary"]:hover,
-button[data-testid="baseButton-primary"]:hover {
-    background-color: var(--teal-dark) !important;
-
-    color: #FFFFFF !important;
-}
-
-
-/* =========================================================
-   NORMAL BUTTONS
-   ========================================================= */
-
-.stButton > button {
-    border-radius: 9px !important;
-
-    border: 1px solid var(--border) !important;
-
-    color: var(--navy) !important;
-
-    background-color: #FFFFFF !important;
-
-    font-weight: 500 !important;
-}
-
-
-.stButton > button:hover {
-    border-color: var(--teal) !important;
-
-    color: var(--teal-dark) !important;
-}
-
-
-/* =========================================================
-   INPUT FIELDS
-   ========================================================= */
-
-input,
-textarea {
-    background-color: #FFFFFF !important;
-
-    color: var(--text) !important;
-
-    border-radius: 8px !important;
-}
-
-
-/* =========================================================
-   SELECT BOX
-   ========================================================= */
-
-div[data-baseweb="select"] {
-    background-color: #FFFFFF !important;
-
-    border-radius: 8px !important;
-}
-
-
-div[data-baseweb="select"] * {
-    color: var(--text) !important;
-}
-
-
-/* =========================================================
-   FILE UPLOADER
-   ========================================================= */
-
-[data-testid="stFileUploader"] {
-    background-color: #FFFFFF !important;
-
-    border: 1px dashed var(--teal) !important;
-
-    border-radius: 12px !important;
-
-    padding: 10px !important;
-}
-
-
-/* =========================================================
-   INFORMATION BOX
-   ========================================================= */
-
-div[data-testid="stAlert"] {
-    border-radius: 10px !important;
-}
-
-
-/* =========================================================
-   PROTOTYPE DISCLAIMER
-   ========================================================= */
-
-.drishti-banner {
-    background-color: #FFF7E6 !important;
-
-    border: 1px solid #F5D08A !important;
-
-    border-radius: 10px !important;
-
-    padding: 11px 16px !important;
-
-    margin-bottom: 16px !important;
-
-    color: #7A5200 !important;
-
-    font-size: 0.88rem !important;
-}
-
-
-.drishti-banner * {
-    color: #7A5200 !important;
-}
-
-
-/* =========================================================
-   HEALTHCARE HEADER
-   ========================================================= */
-
-.drishti-header {
-    background: linear-gradient(
-        135deg,
-        #0B1F3A,
-        #008C95
-    );
-
-    border-radius: 16px;
-
-    padding: 24px 28px;
-
-    margin-bottom: 22px;
+    background:
+        linear-gradient(
+            135deg,
+            #0B1F3A,
+            #075B70
+        );
 
     color: white;
 
     box-shadow:
-        0 4px 14px rgba(11,31,58,0.12);
+        0 14px 40px rgba(7,59,76,0.22);
+
+    animation: cardEnter 0.7s ease;
 }
 
-
-.drishti-header h1,
-.drishti-header h2,
-.drishti-header h3,
-.drishti-header p,
-.drishti-header span {
+.hero h1 {
     color: white !important;
+    margin-bottom: 5px;
+}
+
+.hero p {
+    color: #D7F1F4 !important;
 }
 
 
 /* =========================================================
-   SECTION TITLE
+   METRICS
    ========================================================= */
 
-.section-title {
-    color: var(--navy);
+div[data-testid="stMetric"] {
 
-    font-size: 1.15rem;
-
-    font-weight: 700;
-
-    margin-top: 10px;
-
-    margin-bottom: 12px;
-}
-
-
-/* =========================================================
-   STEP BADGE
-   ========================================================= */
-
-.step-badge {
-    display: inline-block;
-
-    background-color: var(--teal-light);
-
-    color: var(--teal-dark);
-
-    padding: 5px 11px;
-
-    border-radius: 20px;
-
-    font-size: 0.82rem;
-
-    font-weight: 700;
-
-    margin-bottom: 8px;
-}
-
-
-/* =========================================================
-   TABLE
-   ========================================================= */
-
-div[data-testid="stDataFrame"] {
-    background-color: #FFFFFF !important;
-
-    border-radius: 10px !important;
-}
-
-
-/* =========================================================
-   EXPANDER
-   ========================================================= */
-
-div[data-testid="stExpander"] {
-    border: 1px solid var(--border) !important;
-
-    border-radius: 10px !important;
-
-    background-color: #FFFFFF !important;
-}
-
-
-/* =========================================================
-   TABS
-   ========================================================= */
-
-button[data-baseweb="tab"] {
-    color: var(--muted) !important;
-
-    font-weight: 600 !important;
-}
-
-
-button[data-baseweb="tab"][aria-selected="true"] {
-    color: var(--teal-dark) !important;
-}
-
-
-/* =========================================================
-   DIVIDER
-   ========================================================= */
-
-hr {
-    border-color: var(--border) !important;
-}
-
-
-/* =========================================================
-   CAPTIONS
-   ========================================================= */
-
-.stCaption {
-    color: var(--muted) !important;
-}
-
-
-/* =========================================================
-   LOGIN CARD
-   ========================================================= */
-
-.login-card {
-    background-color: #FFFFFF;
+    border-radius: 16px;
 
     border: 1px solid var(--border);
 
-    border-radius: 18px;
+    padding: 17px;
 
-    padding: 30px;
+    background: var(--card-light);
 
     box-shadow:
-        0 8px 25px rgba(11,31,58,0.08);
+        0 5px 20px rgba(11,31,58,0.06);
+
+    transition:
+        transform 0.25s ease,
+        box-shadow 0.25s ease;
+}
+
+div[data-testid="stMetric"]:hover {
+
+    transform: translateY(-4px);
+
+    box-shadow:
+        0 12px 28px rgba(11,31,58,0.12);
 }
 
 
 /* =========================================================
-   FOOTER
+   BUTTONS
    ========================================================= */
 
-.drishti-footer {
-    text-align: center;
+.stButton > button {
 
-    color: var(--muted);
+    border-radius: 10px;
 
-    font-size: 0.78rem;
+    font-weight: 650;
 
-    margin-top: 30px;
+    border: 1px solid #1976D2;
 
-    padding-top: 15px;
+    transition:
+        transform 0.2s ease,
+        box-shadow 0.2s ease;
+}
 
-    border-top: 1px solid var(--border);
+.stButton > button:hover {
+
+    transform: translateY(-2px);
+
+    box-shadow:
+        0 6px 16px rgba(25,118,210,0.20);
+}
+
+
+/* =========================================================
+   ALERTS
+   ========================================================= */
+
+.drishti-banner {
+
+    border-radius: 12px;
+
+    padding: 13px 17px;
+
+    background: #FFF8E7;
+
+    border: 1px solid #F2D38A;
+
+    color: #704F00;
+
+    margin-bottom: 18px;
+}
+
+
+/* =========================================================
+   FEATURE CHIPS
+   ========================================================= */
+
+.feature-chip {
+
+    display: inline-block;
+
+    padding: 7px 12px;
+
+    margin: 4px;
+
+    border-radius: 30px;
+
+    background: var(--teal-light);
+
+    color: #00636A;
+
+    font-size: 0.86rem;
+
+    font-weight: 600;
+}
+
+
+/* =========================================================
+   STATUS
+   ========================================================= */
+
+.status-good {
+
+    border-left: 5px solid #16803C;
+
+    padding: 13px;
+
+    background: #EFFAF3;
+
+    border-radius: 10px;
+}
+
+.status-warning {
+
+    border-left: 5px solid #D97706;
+
+    padding: 13px;
+
+    background: #FFF7E6;
+
+    border-radius: 10px;
+}
+
+
+/* =========================================================
+   PRINT
+   ========================================================= */
+
+@media print {
+
+    section[data-testid="stSidebar"],
+    header,
+    footer,
+    .stButton,
+    button {
+        display: none !important;
+    }
+
+    .block-container {
+        max-width: 100%;
+    }
+
+}
+
+
+/* =========================================================
+   MOBILE
+   ========================================================= */
+
+@media (max-width: 768px) {
+
+    .hero {
+        padding: 20px;
+    }
+
+    .drishti-card {
+        padding: 16px;
+    }
+
 }
 
 </style>
@@ -642,11 +480,11 @@ hr {
 )
 
 
-# ============================================================================
+# ============================================================
 # SESSION STATE
-# ============================================================================
+# ============================================================
 
-_defaults = {
+DEFAULTS = {
 
     "logged_in": False,
 
@@ -669,65 +507,63 @@ _defaults = {
     "wf_risk": None,
 
     "wf_patient_id": None,
+
 }
 
 
-for key, value in _defaults.items():
+for key, value in DEFAULTS.items():
 
     if key not in st.session_state:
-
         st.session_state[key] = value
 
 
-# ============================================================================
-# RESET SCREENING WORKFLOW
-# ============================================================================
-
 def reset_workflow():
 
-    workflow_keys = [
-
+    keys = [
         "wf_image_bgr",
-
         "wf_image_source",
-
         "wf_quality",
-
         "wf_prediction",
-
         "wf_heatmap",
-
         "wf_risk",
-
         "wf_patient_id",
     ]
 
-    for key in workflow_keys:
-
+    for key in keys:
         st.session_state[key] = None
 
 
-# ============================================================================
-# APPLICATION HEADER
-# ============================================================================
+# ============================================================
+# HERO
+# ============================================================
 
-def show_header(title, subtitle=None):
+def hero(title, subtitle=None):
 
-    if subtitle is None:
-
-        subtitle = APP_TAGLINE
+    subtitle = subtitle or APP_TAGLINE
 
     st.markdown(
         f"""
-        <div class="drishti-header">
+        <div class="hero">
 
-            <h1>
-                👁️ {title}
-            </h1>
+            <h1>👁️ {html.escape(title)}</h1>
 
-            <p>
-                {subtitle}
-            </p>
+            <p>{html.escape(subtitle)}</p>
+
+            <span class="feature-chip">
+                Explainable AI
+            </span>
+
+            <span class="feature-chip">
+                Rural Screening
+            </span>
+
+            <span class="feature-chip">
+                Early Detection
+            </span>
+
+            <span class="feature-chip">
+                Smart Referral
+            </span>
 
         </div>
         """,
@@ -735,114 +571,51 @@ def show_header(title, subtitle=None):
     )
 
 
-# ============================================================================
-# LOGIN PAGE
-# ============================================================================
+# ============================================================
+# LOGIN
+# ============================================================
 
 def login_page():
 
-    lang = st.session_state.lang
-
-    col_logo, col_lang = st.columns(
-        [4, 1]
+    left, right = st.columns(
+        [1.25, 1]
     )
 
-    with col_logo:
-
-        st.markdown(
-            f"""
-            <div style="
-                padding: 10px 0 5px 0;
-            ">
-
-                <h1 style="
-                    color:#0B1F3A;
-                    margin-bottom:0;
-                ">
-                    👁️ {t('app_title', lang)}
-                </h1>
-
-                <p style="
-                    color:#607D8B;
-                    margin-top:4px;
-                ">
-                    {t('app_tagline', lang)}
-                </p>
-
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-
-    with col_lang:
-
-        chosen = st.selectbox(
-            t(
-                "select_language",
-                lang
-            ),
-            list(
-                SUPPORTED_LANGUAGES.keys()
-            ),
-            index=0
-        )
-
-        st.session_state.lang = (
-            SUPPORTED_LANGUAGES[chosen]
-        )
-
-        lang = st.session_state.lang
-
-
-    # Prototype warning
-
-    st.markdown(
-        f"""
-        <div class="drishti-banner">
-            ⚠️ {t('prototype_banner', lang)}
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-
-
-    # Login card
-
-    _, mid, _ = st.columns(
-        [1, 1.2, 1]
-    )
-
-    with mid:
-
-        st.markdown(
-            '<div class="login-card">',
-            unsafe_allow_html=True
-        )
+    with left:
 
         st.markdown(
             """
             <div style="
-                text-align:center;
-                margin-bottom:20px;
+                padding-top:50px;
+                animation:cardEnter .8s ease;
             ">
 
                 <div style="
-                    font-size:50px;
+                    font-size:70px;
+                    animation:pulse 2s infinite;
+                    width:90px;
+                    border-radius:50%;
                 ">
-                    🏥
+                    👁️
                 </div>
 
-                <h2 style="
-                    color:#0B1F3A;
-                    margin-bottom:5px;
-                ">
+                <h1>
                     DRISHTI-XAI
-                </h2>
+                </h1>
 
-                <p style="
-                    color:#607D8B;
-                ">
-                    AI-assisted retinal screening
+                <h3>
+                    Explainable AI Diabetic
+                    Retinopathy Screening
+                </h3>
+
+                <p>
+                    A rural-friendly AI-assisted
+                    screening workflow connecting
+                    PHC health workers with eye specialists.
+                </p>
+
+                <p>
+                    <b>PHC → AI Screening → Specialist</b>
                 </p>
 
             </div>
@@ -850,48 +623,41 @@ def login_page():
             unsafe_allow_html=True
         )
 
+    with right:
 
-        st.subheader(
-            t(
-                "login_title",
-                lang
-            )
+        st.markdown(
+            "<br><br>",
+            unsafe_allow_html=True
         )
 
+        st.markdown(
+            '<div class="drishti-card">',
+            unsafe_allow_html=True
+        )
+
+        st.subheader("Secure Login")
 
         username = st.text_input(
-            t(
-                "username",
-                lang
-            ),
-            key="login_user"
+            "Username",
+            key="login_username"
         )
-
 
         password = st.text_input(
-            t(
-                "password",
-                lang
-            ),
+            "Password",
             type="password",
-            key="login_pass"
+            key="login_password"
         )
 
-
         if st.button(
-            t(
-                "login_button",
-                lang
-            ),
-            use_container_width=True,
-            type="primary"
+            "Login",
+            type="primary",
+            use_container_width=True
         ):
 
             user = authenticate(
                 username,
                 password
             )
-
 
             if user:
 
@@ -906,36 +672,45 @@ def login_page():
             else:
 
                 st.error(
-                    t(
-                        "login_error",
-                        lang
-                    )
+                    "Invalid username or password."
                 )
 
-
         st.caption(
-            "Demo accounts — "
-            "Health Worker: `healthworker1` / `worker123`  ·  "
-            "Doctor: `doctor1` / `doctor123`"
+            "Demo Health Worker: "
+            "`healthworker1 / worker123`"
         )
 
+        st.caption(
+            "Demo Doctor: "
+            "`doctor1 / doctor123`"
+        )
 
         st.markdown(
             "</div>",
             unsafe_allow_html=True
         )
 
+    st.markdown(
+        """
+        <div class="drishti-banner">
 
-# ============================================================================
-# SIDEBAR NAVIGATION
-# ============================================================================
+        ⚠️ <b>Prototype:</b>
+        AI-assisted screening aid only.
+        Not a certified medical diagnostic device.
+
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+
+# ============================================================
+# SIDEBAR
+# ============================================================
 
 def sidebar_nav():
 
-    lang = st.session_state.lang
-
     user = st.session_state.user
-
 
     with st.sidebar:
 
@@ -943,27 +718,27 @@ def sidebar_nav():
             """
             <div style="
                 text-align:center;
-                padding:10px 0 5px 0;
+                padding:12px 0 8px;
             ">
 
                 <div style="
-                    font-size:38px;
+                    font-size:48px;
                 ">
                     👁️
                 </div>
 
                 <h2 style="
-                    color:white !important;
                     margin:0;
+                    color:white !important;
                 ">
                     DRISHTI-XAI
                 </h2>
 
                 <p style="
-                    color:#B2DFDB !important;
-                    font-size:0.8rem;
+                    color:#B8D8E5 !important;
+                    font-size:.8rem;
                 ">
-                    Explainable AI Screening
+                    Rural Retina Screening
                 </p>
 
             </div>
@@ -971,141 +746,97 @@ def sidebar_nav():
             unsafe_allow_html=True
         )
 
-
         st.divider()
-
 
         st.markdown(
             f"""
             <div style="
-                background:rgba(255,255,255,0.08);
                 padding:12px;
-                border-radius:10px;
-                margin-bottom:10px;
+                border-radius:12px;
+                background:rgba(255,255,255,.08);
             ">
 
-                <strong>
-                    {t('welcome', lang)},
-                    {user['display_name']}
-                </strong>
+            <b>Welcome</b><br>
+            {html.escape(user["display_name"])}
 
-                <br>
+            <br><br>
 
-                <span style="
-                    font-size:0.8rem;
-                    color:#B2DFDB !important;
-                ">
-                    {t('role', lang)}:
-                    {user['role']}
-                </span>
+            <small>
+            Role: {html.escape(user["role"])}
+            </small>
 
             </div>
             """,
             unsafe_allow_html=True
         )
 
+        st.write("")
 
-        # Language
+        # ----------------------------------------------------
+        # NAVIGATION
+        # ----------------------------------------------------
 
-        chosen = st.selectbox(
-            t(
-                "select_language",
-                lang
-            ),
-            list(
-                SUPPORTED_LANGUAGES.keys()
-            ),
-            index=list(
-                SUPPORTED_LANGUAGES.values()
-            ).index(lang),
-        )
+        if user["role"] == "Doctor":
 
+            nav_options = {
 
-        st.session_state.lang = (
-            SUPPORTED_LANGUAGES[chosen]
-        )
+                "📝 Patient Registration":
+                    "Register",
 
+                "🔬 AI Screening":
+                    "Screening",
 
-        lang = st.session_state.lang
+                "🩺 Doctor Review":
+                    "Doctor Review",
 
+                "📊 Dashboard":
+                    "Dashboard",
 
-        st.divider()
-
-
-        # Navigation
-
-        nav_options = {
-
-            "🏠 Home / Dashboard":
-                "Dashboard",
-
-            t(
-                "nav_register",
-                lang
-            ):
-                "Register",
-
-            t(
-                "nav_upload",
-                lang
-            ):
-                "Screening",
-        }
-
-
-        choice_label = st.radio(
-            "Navigation",
-            list(
-                nav_options.keys()
-            ),
-            label_visibility="collapsed"
-        )
-
-
-        st.session_state.page = (
-            nav_options[choice_label]
-        )
-
-
-        st.divider()
-
-
-        # Model status
-
-        st.markdown(
-            "**System Status**"
-        )
-
-
-        if dr_model.mode == "mock":
-
-            st.caption(
-                "🧪 Demo AI model active"
-            )
+            }
 
         else:
 
-            st.caption(
-                "✅ AI model loaded"
-            )
+            nav_options = {
 
+                "📝 Patient Registration":
+                    "Register",
 
-        st.caption(
-            "🏥 Rural screening workflow"
+                "🔬 AI Screening":
+                    "Screening",
+
+                "📊 Dashboard":
+                    "Dashboard",
+
+            }
+
+        labels = list(
+            nav_options.keys()
         )
 
+        current_page = st.session_state.page
+
+        current_label = next(
+            (
+                label
+                for label, page in nav_options.items()
+                if page == current_page
+            ),
+            labels[0]
+        )
+
+        choice = st.radio(
+            "Navigation",
+            labels,
+            index=labels.index(current_label),
+            label_visibility="collapsed"
+        )
+
+        st.session_state.page = nav_options[choice]
 
         st.divider()
 
-
-        # Logout
-
         if st.button(
-            "↩️ " +
-            t(
-                "logout",
-                lang
-            ),
+            "🚪 Logout",
             use_container_width=True
         ):
 
@@ -1118,551 +849,185 @@ def sidebar_nav():
             st.rerun()
 
 
-# ============================================================================
-# PAGE: HOME / DASHBOARD
-# ============================================================================
-
-def page_home():
-
-    lang = st.session_state.lang
-
-    screenings = get_screenings()
-
-    patients = get_patients()
-
-
-    total_patients = len(patients)
-
-    total_screenings = len(screenings)
-
-
-    if screenings:
-
-        df = pd.DataFrame(screenings)
-
-
-        high_risk = int(
-            df["risk_level"].isin(
-                [
-                    "High",
-                    "Critical"
-                ]
-            ).sum()
-        )
-
-
-        pending_followup = int(
-            (
-                df["followup_status"]
-                == "Pending"
-            ).sum()
-        )
-
-
-        avg_confidence = float(
-            df["confidence"].mean()
-        )
-
-    else:
-
-        df = pd.DataFrame()
-
-        high_risk = 0
-
-        pending_followup = 0
-
-        avg_confidence = 0.0
-
-
-    # Header
-
-    show_header(
-        "DRISHTI-XAI",
-        "Explainable AI for Diabetic Retinopathy Screening in Rural India"
-    )
-
-
-    # Workflow
-
-    st.markdown(
-        """
-        <div class="drishti-card">
-
-            <h3>
-                🏥 PHC → 🤖 AI Screening → 👨‍⚕️ Specialist
-            </h3>
-
-            <p>
-                Early detection and timely referral
-                for patients at risk of diabetic retinopathy.
-            </p>
-
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-
-
-    # KPI
-
-    st.markdown(
-        '<div class="section-title">'
-        '📊 Screening Overview'
-        '</div>',
-        unsafe_allow_html=True
-    )
-
-
-    k1, k2, k3, k4, k5 = st.columns(5)
-
-
-    k1.metric(
-        "👥 Total Patients",
-        total_patients
-    )
-
-
-    k2.metric(
-        "🔬 Total Screenings",
-        total_screenings
-    )
-
-
-    k3.metric(
-        "⚠️ High/Critical Risk",
-        high_risk
-    )
-
-
-    k4.metric(
-        "📅 Pending Follow-up",
-        pending_followup
-    )
-
-
-    k5.metric(
-        "🤖 Avg. AI Confidence",
-        f"{avg_confidence:.1f}%"
-    )
-
-
-    st.divider()
-
-
-    # Quick actions
-
-    st.markdown(
-        '<div class="section-title">'
-        '⚡ Quick Actions'
-        '</div>',
-        unsafe_allow_html=True
-    )
-
-
-    q1, q2, q3 = st.columns(3)
-
-
-    with q1:
-
-        if st.button(
-            "👤 Register Patient",
-            use_container_width=True,
-            type="primary"
-        ):
-
-            st.session_state.page = "Register"
-
-            st.rerun()
-
-
-    with q2:
-
-        if st.button(
-            "🔬 Start Screening",
-            use_container_width=True,
-            type="primary"
-        ):
-
-            st.session_state.page = "Screening"
-
-            st.rerun()
-
-
-    with q3:
-
-        st.info(
-            "💡 Use the sidebar to access "
-            "patient records and analytics."
-        )
-
-
-    # Analytics
-
-    if screenings:
-
-        st.divider()
-
-        st.markdown(
-            '<div class="section-title">'
-            '📈 Screening Analytics'
-            '</div>',
-            unsafe_allow_html=True
-        )
-
-
-        c1, c2 = st.columns(2)
-
-
-        with c1:
-
-            st.markdown(
-                "<div class='drishti-card'>",
-                unsafe_allow_html=True
-            )
-
-            st.markdown(
-                "### 🧠 DR Severity Distribution"
-            )
-
-            st.bar_chart(
-                df[
-                    "dr_class"
-                ].value_counts()
-            )
-
-            st.markdown(
-                "</div>",
-                unsafe_allow_html=True
-            )
-
-
-        with c2:
-
-            st.markdown(
-                "<div class='drishti-card'>",
-                unsafe_allow_html=True
-            )
-
-            st.markdown(
-                "### ⚠️ Risk Distribution"
-            )
-
-            st.bar_chart(
-                df[
-                    "risk_level"
-                ].value_counts()
-            )
-
-            st.markdown(
-                "</div>",
-                unsafe_allow_html=True
-            )
-
-
-        # Recent screenings
-
-        st.markdown(
-            "<div class='drishti-card'>",
-            unsafe_allow_html=True
-        )
-
-        st.markdown(
-            "### 📋 Recent Screening Activity"
-        )
-
-
-        show_df = df[
-            [
-                "patient_code",
-                "patient_name",
-                "age",
-                "dr_class",
-                "confidence",
-                "risk_level",
-                "referral",
-                "followup_status",
-                "screened_by",
-                "screened_at",
-            ]
-        ].rename(
-            columns={
-                "patient_code":
-                    "Patient ID",
-
-                "patient_name":
-                    "Name",
-
-                "age":
-                    "Age",
-
-                "dr_class":
-                    "DR Class",
-
-                "confidence":
-                    "Confidence (%)",
-
-                "risk_level":
-                    "Risk",
-
-                "referral":
-                    "Referral",
-
-                "followup_status":
-                    "Follow-up",
-
-                "screened_by":
-                    "Screened By",
-
-                "screened_at":
-                    "Screened At",
-            }
-        )
-
-
-        st.dataframe(
-            show_df,
-            use_container_width=True,
-            hide_index=True
-        )
-
-
-        st.markdown(
-            "</div>",
-            unsafe_allow_html=True
-        )
-
-
-    else:
-
-        st.markdown(
-            """
-            <div class="drishti-card">
-
-                <h3>
-                    👁️ Start your first screening
-                </h3>
-
-                <p>
-                    Register a patient and upload
-                    a fundus image to begin AI-assisted
-                    diabetic retinopathy screening.
-                </p>
-
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-
-
-# ============================================================================
-# PAGE: PATIENT REGISTRATION
-# ============================================================================
+# ============================================================
+# PATIENT REGISTRATION
+# ============================================================
 
 def page_register():
 
-    lang = st.session_state.lang
-
-
-    show_header(
-        f"👤 {t('nav_register', lang)}",
-        "Register and manage patients before retinal screening."
+    hero(
+        "Patient Registration",
+        "Create and manage patient records before retinal screening."
     )
 
+    patients = get_patients()
 
-    col1, col2 = st.columns(
-        [1, 1.3]
+    c1, c2 = st.columns(
+        [1, 1.45]
     )
 
-
-    # ------------------------------------------------------------------------
-    # Registration form
-    # ------------------------------------------------------------------------
-
-    with col1:
+    with c1:
 
         st.markdown(
-            "<div class='drishti-card'>",
+            '<div class="drishti-card">',
             unsafe_allow_html=True
         )
 
-
-        st.markdown(
-            "### 👤 Patient Information"
+        st.subheader(
+            "➕ Register New Patient"
         )
 
-
         with st.form(
-            "register_form",
+            "patient_registration",
             clear_on_submit=True
         ):
 
             patient_code = st.text_input(
-                t(
-                    "patient_id",
-                    lang
-                ),
-                placeholder="e.g. PT-1005"
+                "Patient ID",
+                placeholder="PT-1005"
             )
-
 
             name = st.text_input(
-                t(
-                    "patient_name",
-                    lang
-                )
+                "Patient Name"
             )
 
-
             age = st.number_input(
-                t(
-                    "age",
-                    lang
-                ),
+                "Age",
                 min_value=1,
                 max_value=120,
                 value=45
             )
 
-
             duration = st.number_input(
-                t(
-                    "diabetes_duration",
-                    lang
-                ),
+                "Diabetes Duration (years)",
                 min_value=0,
                 max_value=70,
                 value=5
             )
 
-
-            prev_screen = st.selectbox(
-                t(
-                    "previous_screening",
-                    lang
-                ),
-                [
-                    "No",
-                    "Yes"
-                ]
+            previous = st.selectbox(
+                "Previous Screening",
+                ["No", "Yes"]
             )
 
-
-            submitted = st.form_submit_button(
-                t(
-                    "register_button",
-                    lang
-                ),
+            submit = st.form_submit_button(
+                "Register Patient",
                 type="primary",
                 use_container_width=True
             )
 
+        if submit:
 
-            if submitted:
+            if not patient_code.strip() or not name.strip():
 
-                if not patient_code or not name:
+                st.error(
+                    "Patient ID and Name are required."
+                )
 
-                    st.error(
-                        "Patient ID and Name are required."
+            else:
+
+                new_id = add_patient(
+                    patient_code.strip(),
+                    name.strip(),
+                    int(age),
+                    int(duration),
+                    previous,
+                    st.session_state.user[
+                        "display_name"
+                    ]
+                )
+
+                if new_id:
+
+                    st.success(
+                        "Patient registered successfully."
                     )
+
+                    st.rerun()
 
                 else:
 
-                    add_patient(
-                        patient_code,
-                        name,
-                        int(age),
-                        int(duration),
-                        prev_screen,
-                        st.session_state.user[
-                            "display_name"
-                        ]
+                    st.error(
+                        "Patient ID already exists."
                     )
-
-
-                    st.success(
-                        t(
-                            "registered_success",
-                            lang
-                        )
-                    )
-
 
         st.markdown(
             "</div>",
             unsafe_allow_html=True
         )
 
-
-    # ------------------------------------------------------------------------
-    # Patient list
-    # ------------------------------------------------------------------------
-
-    with col2:
+    with c2:
 
         st.markdown(
-            "<div class='drishti-card'>",
+            '<div class="drishti-card">',
             unsafe_allow_html=True
         )
 
-
-        st.markdown(
-            "### 👥 Registered Patients"
+        st.subheader(
+            f"👥 Registered Patients ({len(patients)})"
         )
 
+        if patients:
 
-        patients = get_patients()
-
-
-        if not patients:
-
-            st.info(
-                t(
-                    "no_patients",
-                    lang
-                )
+            search = st.text_input(
+                "Search patient",
+                placeholder="Name or Patient ID"
             )
+
+            filtered = patients
+
+            if search:
+
+                search_lower = search.lower()
+
+                filtered = [
+
+                    p for p in patients
+
+                    if (
+                        search_lower
+                        in p["name"].lower()
+                        or
+                        search_lower
+                        in p["patient_code"].lower()
+                    )
+                ]
+
+            df = pd.DataFrame(filtered)
+
+            if not df.empty:
+
+                display = df[
+                    [
+                        "patient_code",
+                        "name",
+                        "age",
+                        "diabetes_duration",
+                        "previous_screening",
+                        "registered_at",
+                    ]
+                ].copy()
+
+                display.columns = [
+                    "Patient ID",
+                    "Name",
+                    "Age",
+                    "DM Duration",
+                    "Previous Screening",
+                    "Registered At",
+                ]
+
+                st.dataframe(
+                    display,
+                    use_container_width=True,
+                    hide_index=True
+                )
 
         else:
 
-            df = pd.DataFrame(
-                patients
+            st.info(
+                "No registered patients yet."
             )
-
-
-            columns = [
-                "patient_code",
-                "name",
-                "age",
-                "diabetes_duration",
-                "previous_screening",
-                "registered_at",
-            ]
-
-
-            df = df[
-                [
-                    c for c in columns
-                    if c in df.columns
-                ]
-            ]
-
-
-            df.columns = [
-                "Patient ID",
-                "Name",
-                "Age",
-                "DM Duration (y)",
-                "Prev. Screening",
-                "Registered At",
-            ][:len(df.columns)]
-
-
-            st.dataframe(
-                df,
-                use_container_width=True,
-                hide_index=True
-            )
-
 
         st.markdown(
             "</div>",
@@ -1670,41 +1035,26 @@ def page_register():
         )
 
 
-# ============================================================================
-# PAGE: SCREENING
-# ============================================================================
+# ============================================================
+# SCREENING
+# ============================================================
 
 def page_screening():
 
-    lang = st.session_state.lang
-
-
-    show_header(
-        f"🔬 {t('nav_upload', lang)}",
-        "Fundus image quality check, AI screening, explanation and referral."
+    hero(
+        "AI Retinal Screening",
+        "Fundus image quality → AI screening → explanation → risk → referral."
     )
 
-
     patients = get_patients()
-
 
     if not patients:
 
         st.warning(
-            t(
-                "no_patients",
-                lang
-            )
-            +
-            " Please register a patient first."
+            "Please register a patient first."
         )
 
         return
-
-
-    # ------------------------------------------------------------------------
-    # Patient selection
-    # ------------------------------------------------------------------------
 
     patient_labels = {
 
@@ -1714,27 +1064,18 @@ def page_screening():
         for p in patients
     }
 
-
-    chosen_label = st.selectbox(
-        t(
-            "select_patient",
-            lang
-        ),
-        list(
-            patient_labels.keys()
-        )
+    selected_label = st.selectbox(
+        "Select Patient",
+        list(patient_labels.keys())
     )
 
-
     patient_id = patient_labels[
-        chosen_label
+        selected_label
     ]
-
 
     patient = get_patient_by_id(
         patient_id
     )
-
 
     if (
         st.session_state.wf_patient_id
@@ -1743,170 +1084,117 @@ def page_screening():
 
         reset_workflow()
 
-        st.session_state.wf_patient_id = (
-            patient_id
-        )
-
-
-    # ------------------------------------------------------------------------
-    # Patient summary
-    # ------------------------------------------------------------------------
-
-    st.markdown(
-        "<div class='drishti-card'>",
-        unsafe_allow_html=True
-    )
-
+        st.session_state.wf_patient_id = patient_id
 
     st.markdown(
         f"""
-        ### 👤 Patient Summary
+        <div class="drishti-card">
 
-        **Patient:** {patient['name']}
+        <b>Patient:</b>
+        {html.escape(patient["name"])}
+        &nbsp;&nbsp; | &nbsp;&nbsp;
 
-        **Age:** {patient['age']}
+        <b>Age:</b>
+        {patient["age"]}
 
-        **Diabetes duration:**
-        {patient['diabetes_duration']} years
+        &nbsp;&nbsp; | &nbsp;&nbsp;
 
-        **Previous screening:**
-        {patient['previous_screening']}
-        """
-    )
+        <b>Diabetes:</b>
+        {patient["diabetes_duration"]} years
 
+        &nbsp;&nbsp; | &nbsp;&nbsp;
 
-    st.markdown(
-        "</div>",
+        <b>Previous screening:</b>
+        {html.escape(patient["previous_screening"])}
+
+        </div>
+        """,
         unsafe_allow_html=True
     )
 
-
-    # ------------------------------------------------------------------------
-    # Step 1 — Image upload
-    # ------------------------------------------------------------------------
-
-    st.markdown(
-        '<span class="step-badge">'
-        'STEP 1'
-        '</span>',
-        unsafe_allow_html=True
-    )
-
+    # --------------------------------------------------------
+    # IMAGE
+    # --------------------------------------------------------
 
     st.subheader(
-        t(
-            "upload_image",
-            lang
-        )
+        "1️⃣ Fundus Image"
     )
 
-
-    col_up, col_sample = st.columns(
+    up_col, sample_col = st.columns(
         [2, 1]
     )
 
+    with up_col:
 
-    with col_up:
-
-        uploaded_file = st.file_uploader(
+        uploaded = st.file_uploader(
             "Upload fundus image",
-            type=[
-                "jpg",
-                "jpeg",
-                "png"
-            ]
+            type=["jpg", "jpeg", "png"]
         )
 
+        if uploaded:
 
-        if uploaded_file is not None:
-
-            pil_img = Image.open(
-                uploaded_file
-            )
-
+            image = Image.open(
+                uploaded
+            ).convert("RGB")
 
             st.session_state.wf_image_bgr = (
-                pil_to_bgr(
-                    pil_img
-                )
+                pil_to_bgr(image)
             )
-
 
             st.session_state.wf_image_source = (
                 "upload"
             )
 
-
             st.session_state.wf_quality = None
-
             st.session_state.wf_prediction = None
-
             st.session_state.wf_heatmap = None
-
             st.session_state.wf_risk = None
 
-
-    with col_sample:
+    with sample_col:
 
         st.caption(
-            t(
-                "use_sample",
-                lang
-            )
+            "Demo samples"
         )
-
 
         for severity in DR_CLASSES:
 
-            fname = (
+            filename = (
                 "sample_"
-                +
-                severity.replace(
-                    " ",
-                    "_"
+                + severity.replace(
+                    " ", "_"
                 ).lower()
-                +
-                ".png"
+                + ".png"
             )
 
-
-            fpath = os.path.join(
+            path = os.path.join(
                 SAMPLE_IMAGES_DIR,
-                fname
+                filename
             )
 
+            if os.path.exists(path):
 
-            if st.button(
-                f"Use: {severity} sample",
-                key=f"sample_{severity}",
-                use_container_width=True
-            ):
+                if st.button(
+                    f"Use {severity}",
+                    key=f"sample_{severity}",
+                    use_container_width=True
+                ):
 
-                pil_img = Image.open(
-                    fpath
-                )
+                    image = Image.open(
+                        path
+                    ).convert("RGB")
 
-
-                st.session_state.wf_image_bgr = (
-                    pil_to_bgr(
-                        pil_img
+                    st.session_state.wf_image_bgr = (
+                        pil_to_bgr(image)
                     )
-                )
 
+                    st.session_state.wf_image_source = (
+                        f"sample:{severity}"
+                    )
 
-                st.session_state.wf_image_source = (
-                    f"sample:{severity}"
-                )
-
-
-                st.session_state.wf_quality = None
-
-                st.session_state.wf_prediction = None
-
-                st.session_state.wf_heatmap = None
-
-                st.session_state.wf_risk = None
-
+                    st.session_state.wf_quality = None
+                    st.session_state.wf_prediction = None
+                    st.session_state.wf_heatmap = None
+                    st.session_state.wf_risk = None
 
     if (
         st.session_state.wf_image_bgr
@@ -1914,62 +1202,28 @@ def page_screening():
     ):
 
         st.info(
-            "Upload a fundus image or select a demo sample to begin."
+            "Upload a fundus image or choose a demo image."
         )
 
         return
 
-
-    # Image preview
-
-    st.markdown(
-        "<div class='drishti-card'>",
-        unsafe_allow_html=True
+    image_rgb = bgr_to_rgb(
+        st.session_state.wf_image_bgr
     )
-
-
-    st.markdown(
-        "### 👁️ Fundus Image Preview"
-    )
-
 
     st.image(
-        bgr_to_rgb(
-            st.session_state.wf_image_bgr
-        ),
-        caption=t(
-            "image_preview",
-            lang
-        ),
+        image_rgb,
+        caption="Fundus image preview",
         width=360
     )
 
-
-    st.markdown(
-        "</div>",
-        unsafe_allow_html=True
-    )
-
-
-    # ------------------------------------------------------------------------
-    # Step 2 — Quality check
-    # ------------------------------------------------------------------------
-
-    st.markdown(
-        '<span class="step-badge">'
-        'STEP 2'
-        '</span>',
-        unsafe_allow_html=True
-    )
-
+    # --------------------------------------------------------
+    # QUALITY
+    # --------------------------------------------------------
 
     st.subheader(
-        t(
-            "quality_check",
-            lang
-        )
+        "2️⃣ Image Quality Check"
     )
-
 
     if st.button(
         "Run Quality Check",
@@ -1982,104 +1236,68 @@ def page_screening():
             )
         )
 
-
-    quality = (
-        st.session_state.wf_quality
-    )
-
+    quality = st.session_state.wf_quality
 
     if quality:
 
-        cols = st.columns(3)
+        q1, q2, q3 = st.columns(3)
 
-
-        cols[0].metric(
+        q1.metric(
             "Blur Score",
             quality["blur_score"]
         )
 
-
-        cols[1].metric(
+        q2.metric(
             "Brightness",
             quality["brightness"]
         )
 
-
-        cols[2].metric(
+        q3.metric(
             "Resolution",
-            f"{quality['resolution'][0]}"
-            f" × "
+            f"{quality['resolution'][0]} × "
             f"{quality['resolution'][1]}"
         )
-
 
         if quality["passed"]:
 
             st.success(
-                t(
-                    "quality_pass",
-                    lang
-                )
+                "Image quality is suitable for screening."
             )
 
         else:
 
             st.error(
-                t(
-                    "quality_fail",
-                    lang
-                )
+                "Image quality is not suitable."
             )
-
 
             for issue in quality["issues"]:
 
                 st.write(
-                    f"- {t(issue, lang)}"
+                    f"• {issue}"
                 )
 
+            return
 
-            st.stop()
-
-
-    if (
-        not quality
-        or not quality["passed"]
-    ):
+    else:
 
         return
 
-
-    # ------------------------------------------------------------------------
-    # Step 3 — AI Screening
-    # ------------------------------------------------------------------------
-
-    st.markdown(
-        '<span class="step-badge">'
-        'STEP 3'
-        '</span>',
-        unsafe_allow_html=True
-    )
-
+    # --------------------------------------------------------
+    # AI
+    # --------------------------------------------------------
 
     st.subheader(
-        t(
-            "run_screening",
-            lang
-        )
+        "3️⃣ AI Screening & Explainability"
     )
 
-
     if st.button(
-        t(
-            "run_screening",
-            lang
-        ),
-        type="primary"
+        "Run AI Screening",
+        type="primary",
+        use_container_width=False
     ):
 
         with st.spinner(
-            "Running AI screening..."
+            "Analyzing retinal image..."
         ):
 
             dr_class, confidence, probs = (
@@ -2088,19 +1306,15 @@ def page_screening():
                 )
             )
 
-
             st.session_state.wf_prediction = {
 
-                "dr_class":
-                    dr_class,
+                "dr_class": dr_class,
 
-                "confidence":
-                    confidence,
+                "confidence": confidence,
 
-                "probs":
-                    probs,
+                "probs": probs,
+
             }
-
 
             st.session_state.wf_heatmap = (
                 generate_explanation(
@@ -2109,109 +1323,68 @@ def page_screening():
                 )
             )
 
-
-            risk_result = assess_risk(
-                dr_class,
-                confidence,
-                patient[
-                    "diabetes_duration"
-                ],
-                patient[
-                    "previous_screening"
-                ]
-            )
-
-
             st.session_state.wf_risk = (
-                risk_result
+                assess_risk(
+                    dr_class,
+                    confidence,
+                    patient[
+                        "diabetes_duration"
+                    ],
+                    patient[
+                        "previous_screening"
+                    ]
+                )
             )
-
 
     prediction = (
         st.session_state.wf_prediction
     )
 
-
     if not prediction:
 
         return
 
-
     if dr_model.mode == "mock":
 
-        st.caption(
-            "🧪 "
-            +
-            t(
-                "demo_mode_notice",
-                lang
-            )
+        st.info(
+            "Prototype demo mode: model output is simulated."
         )
 
+    r1, r2 = st.columns(2)
 
-    # ------------------------------------------------------------------------
-    # Results
-    # ------------------------------------------------------------------------
-
-    col_res, col_cam = st.columns(
-        2
-    )
-
-
-    # Prediction result
-
-    with col_res:
+    with r1:
 
         st.markdown(
-            "<div class='drishti-card'>",
+            '<div class="drishti-card">',
             unsafe_allow_html=True
         )
 
-
-        st.markdown(
-            "### 🤖 AI Screening Result"
+        st.subheader(
+            "AI Result"
         )
-
 
         dr_class_badge(
-            prediction[
-                "dr_class"
-            ]
+            prediction["dr_class"]
         )
 
-
         st.metric(
-            t(
-                "confidence",
-                lang
-            ),
+            "Confidence",
             f"{prediction['confidence']}%"
         )
 
+        probs_df = pd.DataFrame({
 
-        probs_df = pd.DataFrame(
-            {
-                "DR Class":
-                    list(
-                        prediction[
-                            "probs"
-                        ].keys()
-                    ),
+            "DR Class":
+                list(
+                    prediction["probs"].keys()
+                ),
 
-                "Probability":
-                    list(
-                        prediction[
-                            "probs"
-                        ].values()
-                    ),
-            }
-        )
+            "Probability":
+                list(
+                    prediction["probs"].values()
+                ),
 
-
-        st.markdown(
-            "#### Probability Distribution"
-        )
-
+        })
 
         st.bar_chart(
             probs_df.set_index(
@@ -2219,199 +1392,116 @@ def page_screening():
             )
         )
 
-
         st.markdown(
             "</div>",
             unsafe_allow_html=True
         )
 
-
-    # Grad-CAM
-
-    with col_cam:
+    with r2:
 
         st.markdown(
-            "<div class='drishti-card'>",
+            '<div class="drishti-card">',
             unsafe_allow_html=True
         )
 
-
-        st.markdown(
-            "### 🔥 Explainable AI"
+        st.subheader(
+            "Explainable AI — Grad-CAM"
         )
-
-
-        st.caption(
-            "Grad-CAM highlights image regions "
-            "that influenced the AI prediction."
-        )
-
 
         st.image(
             bgr_to_rgb(
                 st.session_state.wf_heatmap
             ),
-            caption=t(
-                "gradcam_caption",
-                lang
-            ),
+            caption="Regions contributing to the model output.",
             use_container_width=True
         )
-
 
         st.markdown(
             "</div>",
             unsafe_allow_html=True
         )
 
+    # --------------------------------------------------------
+    # RISK
+    # --------------------------------------------------------
 
-    # ------------------------------------------------------------------------
-    # Step 4 — Risk and referral
-    # ------------------------------------------------------------------------
-
-    risk = (
-        st.session_state.wf_risk
-    )
-
+    risk = st.session_state.wf_risk
 
     st.markdown(
-        '<span class="step-badge">'
-        'STEP 4'
-        '</span>',
+        '<div class="drishti-card">',
         unsafe_allow_html=True
     )
 
-
-    st.markdown(
-        "<div class='drishti-card'>",
-        unsafe_allow_html=True
+    st.subheader(
+        "4️⃣ Risk Assessment & Referral"
     )
 
-
-    st.markdown(
-        "### ⚠️ Risk Assessment & Smart Referral"
-    )
-
-
-    c1, c2 = st.columns(
+    a, b = st.columns(
         [1, 2]
     )
 
-
-    with c1:
+    with a:
 
         risk_badge(
-            risk[
-                "risk_level"
-            ]
+            risk["risk_level"]
         )
 
-
-    with c2:
+    with b:
 
         st.write(
-            f"**Referral recommendation:** "
-            f"{risk['referral']}"
+            f"**Referral:** {risk['referral']}"
         )
 
-
     with st.expander(
-        "Why this risk level?"
+        "Why was this risk level assigned?"
     ):
 
-        for line in risk[
-            "rationale"
-        ]:
+        for reason in risk["rationale"]:
 
             st.write(
-                f"- {line}"
+                f"• {reason}"
             )
-
 
     st.markdown(
         "</div>",
         unsafe_allow_html=True
     )
 
-
-    # ------------------------------------------------------------------------
-    # Step 5 — Save
-    # ------------------------------------------------------------------------
-
-    st.markdown(
-        '<span class="step-badge">'
-        'STEP 5'
-        '</span>',
-        unsafe_allow_html=True
-    )
-
-
-    st.subheader(
-        "Save Screening Result"
-    )
-
+    # --------------------------------------------------------
+    # SAVE
+    # --------------------------------------------------------
 
     if st.button(
-        t(
-            "save_result",
-            lang
-        ),
-        type="primary",
-        use_container_width=True
+        "💾 Save Screening Record",
+        type="primary"
     ):
 
-        image_path = (
-            save_uploaded_image(
-                st.session_state.wf_image_bgr,
-                UPLOAD_DIR
-            )
+        image_path = save_uploaded_image(
+            st.session_state.wf_image_bgr,
+            UPLOAD_DIR
         )
 
-
-        heatmap_path = (
-            save_uploaded_image(
-                st.session_state.wf_heatmap,
-                HEATMAP_DIR
-            )
+        heatmap_path = save_uploaded_image(
+            st.session_state.wf_heatmap,
+            HEATMAP_DIR
         )
-
 
         add_screening(
             patient_id=patient_id,
-
             image_path=image_path,
-
-            dr_class=prediction[
-                "dr_class"
-            ],
-
-            confidence=prediction[
-                "confidence"
-            ],
-
-            risk_level=risk[
-                "risk_level"
-            ],
-
-            referral=risk[
-                "referral"
-            ],
-
+            dr_class=prediction["dr_class"],
+            confidence=prediction["confidence"],
+            risk_level=risk["risk_level"],
+            referral=risk["referral"],
             heatmap_path=heatmap_path,
-
             screened_by=st.session_state.user[
                 "display_name"
             ],
         )
 
-
         st.success(
-            t(
-                "saved_success",
-                lang
-            )
+            "Screening saved successfully."
         )
-
 
         reset_workflow()
 
@@ -2420,234 +1510,765 @@ def page_screening():
         )
 
 
-# ============================================================================
-# PAGE: DOCTOR DASHBOARD
-# ============================================================================
+# ============================================================
+# DOCTOR REGISTRATION
+# ============================================================
+
+def doctor_registration():
+
+    st.subheader(
+        "👨‍⚕️ Register New Doctor"
+    )
+
+    with st.form(
+        "doctor_registration_form"
+    ):
+
+        name = st.text_input(
+            "Doctor Name"
+        )
+
+        username = st.text_input(
+            "Doctor Username"
+        )
+
+        password = st.text_input(
+            "Password",
+            type="password"
+        )
+
+        confirm = st.text_input(
+            "Confirm Password",
+            type="password"
+        )
+
+        submit = st.form_submit_button(
+            "Create Doctor Account",
+            type="primary"
+        )
+
+        if submit:
+
+            if not name or not username or not password:
+
+                st.error(
+                    "All fields are required."
+                )
+
+            elif password != confirm:
+
+                st.error(
+                    "Passwords do not match."
+                )
+
+            else:
+
+                result = add_doctor(
+                    username.strip(),
+                    password,
+                    name.strip()
+                )
+
+                if result:
+
+                    st.success(
+                        "Doctor account created successfully."
+                    )
+
+                else:
+
+                    st.error(
+                        "Username already exists."
+                    )
+
+
+# ============================================================
+# DOCTOR REVIEW
+# ============================================================
+
+def page_doctor_review():
+
+    hero(
+        "Doctor Review",
+        "Specialist review, clinical suggestions and final patient record."
+    )
+
+    if st.session_state.user["role"] != "Doctor":
+
+        st.error(
+            "Doctor access required."
+        )
+
+        return
+
+    screenings = get_screenings()
+
+    if not screenings:
+
+        st.info(
+            "No screening records are available for review."
+        )
+
+        return
+
+    # --------------------------------------------------------
+    # DOCTOR REGISTRATION EXPANDER
+    # --------------------------------------------------------
+
+    with st.expander(
+        "➕ Register another doctor"
+    ):
+
+        doctor_registration()
+
+    # --------------------------------------------------------
+    # SCREENING SELECT
+    # --------------------------------------------------------
+
+    options = {
+
+        f"{s['patient_code']} — "
+        f"{s['patient_name']} — "
+        f"{s['dr_class']} — "
+        f"{s['screened_at'][:10]}":
+            s["id"]
+
+        for s in screenings
+    }
+
+    selected = st.selectbox(
+        "Select screening record",
+        list(options.keys())
+    )
+
+    screening_id = options[
+        selected
+    ]
+
+    record = get_screening_by_id(
+        screening_id
+    )
+
+    if not record:
+
+        st.error(
+            "Unable to load screening record."
+        )
+
+        return
+
+    # --------------------------------------------------------
+    # PATIENT DETAILS
+    # --------------------------------------------------------
+
+    st.markdown(
+        '<div class="drishti-card">',
+        unsafe_allow_html=True
+    )
+
+    st.subheader(
+        "👤 Patient Information"
+    )
+
+    p1, p2, p3, p4 = st.columns(4)
+
+    p1.metric(
+        "Patient ID",
+        record["patient_code"]
+    )
+
+    p2.metric(
+        "Patient",
+        record["patient_name"]
+    )
+
+    p3.metric(
+        "Age",
+        record["age"]
+    )
+
+    p4.metric(
+        "Diabetes",
+        f"{record['diabetes_duration']} years"
+    )
+
+    st.markdown(
+        "</div>",
+        unsafe_allow_html=True
+    )
+
+    # --------------------------------------------------------
+    # AI RESULT
+    # --------------------------------------------------------
+
+    c1, c2 = st.columns(2)
+
+    with c1:
+
+        st.markdown(
+            '<div class="drishti-card">',
+            unsafe_allow_html=True
+        )
+
+        st.subheader(
+            "AI Screening Result"
+        )
+
+        dr_class_badge(
+            record["dr_class"]
+        )
+
+        st.metric(
+            "AI Confidence",
+            f"{record['confidence']}%"
+        )
+
+        st.markdown(
+            f"""
+            **Risk:** {record["risk_level"]}
+
+            **Referral:** {record["referral"]}
+
+            **Screened by:** {record["screened_by"]}
+
+            **Screened at:** {record["screened_at"]}
+            """
+        )
+
+        st.markdown(
+            "</div>",
+            unsafe_allow_html=True
+        )
+
+    with c2:
+
+        st.markdown(
+            '<div class="drishti-card">',
+            unsafe_allow_html=True
+        )
+
+        st.subheader(
+            "Explainable AI"
+        )
+
+        if record.get("heatmap_path") and os.path.exists(
+            record["heatmap_path"]
+        ):
+
+            st.image(
+                record["heatmap_path"],
+                caption="Grad-CAM explanation",
+                use_container_width=True
+            )
+
+        else:
+
+            st.info(
+                "Grad-CAM image unavailable."
+            )
+
+        st.markdown(
+            "</div>",
+            unsafe_allow_html=True
+        )
+
+    # --------------------------------------------------------
+    # DOCTOR DECISION
+    # --------------------------------------------------------
+
+    st.subheader(
+        "🩺 Doctor Review"
+    )
+
+    existing_decision = (
+        record.get("doctor_decision")
+        or "Needs Specialist Review"
+    )
+
+    decision_options = [
+        "Confirmed — Refer to Specialist",
+        "Confirmed — Routine Follow-up",
+        "Needs Further Examination",
+        "AI Result Requires Reassessment",
+    ]
+
+    decision_index = (
+        decision_options.index(
+            existing_decision
+        )
+        if existing_decision
+        in decision_options
+        else 0
+    )
+
+    decision = st.selectbox(
+        "Doctor's assessment",
+        decision_options,
+        index=decision_index
+    )
+
+    # --------------------------------------------------------
+    # STANDARD ADVICE
+    # --------------------------------------------------------
+
+    st.subheader(
+        "📋 Doctor's Recommendations"
+    )
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+
+        specialist_exam = st.text_area(
+            "1. Specialist Eye Examination",
+            value=record.get(
+                "specialist_exam"
+            ) or
+            "Get a dilated retinal examination and OCT scan at an eye hospital within 2–4 weeks.",
+            height=110
+        )
+
+        blood_sugar = st.text_area(
+            "2. Control Blood Sugar",
+            value=record.get(
+                "blood_sugar_advice"
+            ) or
+            "Target HbA1c below 7%. Take prescribed medicines/insulin regularly and never skip doses.",
+            height=110
+        )
+
+        bp_cholesterol = st.text_area(
+            "3. Blood Pressure & Cholesterol",
+            value=record.get(
+                "bp_cholesterol_advice"
+            ) or
+            "Keep BP under 130/80 mmHg and check lipid profile regularly. Both can worsen retinopathy.",
+            height=110
+        )
+
+    with col2:
+
+        diet = st.text_area(
+            "4. Diet & Lifestyle",
+            value=record.get(
+                "diet_lifestyle_advice"
+            ) or
+            "Follow a high-fibre, lower-sugar diet, stay physically active, avoid smoking and limit alcohol.",
+            height=110
+        )
+
+        warning = st.text_area(
+            "5. Warning Signs",
+            value=record.get(
+                "warning_signs_advice"
+            ) or
+            "Sudden blurred vision, new floaters, dark spots or eye pain require prompt medical attention.",
+            height=110
+        )
+
+        followup = st.text_area(
+            "6. Follow-up Screening",
+            value=record.get(
+                "followup_advice"
+            ) or
+            "Repeat retinal screening according to the specialist's advice and patient risk level.",
+            height=110
+        )
+
+    additional = st.text_area(
+        "7. Additional Advice from Doctor",
+        value=record.get(
+            "additional_doctor_advice"
+        ) or "",
+        placeholder=(
+            "Enter any patient-specific advice, "
+            "medication instructions, referral details "
+            "or follow-up notes..."
+        ),
+        height=130
+    )
+
+    # --------------------------------------------------------
+    # SAVE REVIEW
+    # --------------------------------------------------------
+
+    if st.button(
+        "💾 Save Doctor Review",
+        type="primary",
+        use_container_width=True
+    ):
+
+        save_doctor_review(
+
+            screening_id,
+
+            decision,
+
+            specialist_exam,
+
+            blood_sugar,
+
+            bp_cholesterol,
+
+            diet,
+
+            warning,
+
+            followup,
+
+            additional,
+
+            st.session_state.user[
+                "display_name"
+            ],
+        )
+
+        st.success(
+            "Doctor review saved successfully."
+        )
+
+        st.rerun()
+
+    # --------------------------------------------------------
+    # PRINT
+    # --------------------------------------------------------
+
+    st.divider()
+
+    reviewed = get_screening_by_id(
+        screening_id
+    )
+
+    if reviewed.get(
+        "reviewed_at"
+    ):
+
+        st.success(
+            f"Reviewed by {reviewed['reviewed_by']} "
+            f"on {reviewed['reviewed_at']}"
+        )
+
+        st.markdown(
+            """
+            ### 🖨️ Patient Record
+
+            Use your browser's **Print** option
+            to print or save this reviewed record
+            as PDF.
+            """
+        )
+
+        if st.button(
+            "🖨️ Print / Save Patient Record",
+            use_container_width=True
+        ):
+
+            st.components.v1.html(
+                f"""
+                <script>
+
+                window.parent.print();
+
+                </script>
+                """,
+                height=0
+            )
+
+        # ----------------------------------------------------
+        # PRINTABLE RECORD
+        # ----------------------------------------------------
+
+        st.markdown(
+            f"""
+            <div class="drishti-card">
+
+            <h2>DRISHTI-XAI — Patient Screening Record</h2>
+
+            <hr>
+
+            <h3>Patient Information</h3>
+
+            <p>
+            <b>Patient ID:</b>
+            {html.escape(str(reviewed["patient_code"]))}
+            </p>
+
+            <p>
+            <b>Name:</b>
+            {html.escape(str(reviewed["patient_name"]))}
+            </p>
+
+            <p>
+            <b>Age:</b>
+            {reviewed["age"]}
+            </p>
+
+            <p>
+            <b>Diabetes Duration:</b>
+            {reviewed["diabetes_duration"]} years
+            </p>
+
+            <h3>AI Screening</h3>
+
+            <p>
+            <b>DR Classification:</b>
+            {html.escape(str(reviewed["dr_class"]))}
+            </p>
+
+            <p>
+            <b>AI Confidence:</b>
+            {reviewed["confidence"]}%
+            </p>
+
+            <p>
+            <b>Risk Level:</b>
+            {html.escape(str(reviewed["risk_level"]))}
+            </p>
+
+            <p>
+            <b>Referral:</b>
+            {html.escape(str(reviewed["referral"]))}
+            </p>
+
+            <h3>Doctor Review</h3>
+
+            <p>
+            <b>Assessment:</b>
+            {html.escape(str(reviewed["doctor_decision"]))}
+            </p>
+
+            <h3>Doctor's Recommendations</h3>
+
+            <p>
+            <b>Specialist Eye Examination:</b><br>
+            {html.escape(str(reviewed["specialist_exam"]))}
+            </p>
+
+            <p>
+            <b>Blood Sugar:</b><br>
+            {html.escape(str(reviewed["blood_sugar_advice"]))}
+            </p>
+
+            <p>
+            <b>Blood Pressure & Cholesterol:</b><br>
+            {html.escape(str(reviewed["bp_cholesterol_advice"]))}
+            </p>
+
+            <p>
+            <b>Diet & Lifestyle:</b><br>
+            {html.escape(str(reviewed["diet_lifestyle_advice"]))}
+            </p>
+
+            <p>
+            <b>Warning Signs:</b><br>
+            {html.escape(str(reviewed["warning_signs_advice"]))}
+            </p>
+
+            <p>
+            <b>Follow-up Screening:</b><br>
+            {html.escape(str(reviewed["followup_advice"]))}
+            </p>
+
+            <p>
+            <b>Additional Doctor Advice:</b><br>
+            {html.escape(str(reviewed["additional_doctor_advice"]))}
+            </p>
+
+            <hr>
+
+            <p>
+            <b>Reviewed By:</b>
+            {html.escape(str(reviewed["reviewed_by"]))}
+            </p>
+
+            <p>
+            <b>Reviewed At:</b>
+            {html.escape(str(reviewed["reviewed_at"]))}
+            </p>
+
+            <br>
+
+            <small>
+            DRISHTI-XAI is an AI-assisted screening
+            prototype and is not a certified medical
+            diagnostic device.
+            </small>
+
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+
+# ============================================================
+# DASHBOARD
+# ============================================================
 
 def page_dashboard():
 
-    lang = st.session_state.lang
-
-
-    show_header(
-        f"🩺 {t('dashboard_title', lang)}",
-        "Review screening results, risk levels and follow-up status."
+    hero(
+        "Clinical Dashboard",
+        "Screening, risk and follow-up overview."
     )
-
 
     screenings = get_screenings()
 
     patients = get_patients()
 
-
-    # ------------------------------------------------------------------------
-    # KPI
-    # ------------------------------------------------------------------------
-
-    total_patients = len(
-        patients
-    )
-
-
     total_screenings = len(
         screenings
     )
 
+    high_risk = sum(
+        1
+        for s in screenings
+        if s["risk_level"]
+        in ["High", "Critical"]
+    )
 
-    if screenings:
+    pending = sum(
+        1
+        for s in screenings
+        if s["followup_status"]
+        == "Pending"
+    )
 
-        df = pd.DataFrame(
-            screenings
-        )
-
-
-        high_risk = int(
-            df[
-                "risk_level"
-            ].isin(
-                [
-                    "High",
-                    "Critical"
-                ]
-            ).sum()
-        )
-
-
-        pending = int(
-            (
-                df[
-                    "followup_status"
-                ]
-                ==
-                "Pending"
-            ).sum()
-        )
-
-
-        avg_confidence = float(
-            df[
-                "confidence"
-            ].mean()
-        )
-
-    else:
-
-        df = pd.DataFrame()
-
-        high_risk = 0
-
-        pending = 0
-
-        avg_confidence = 0
-
-
-    # KPI cards
+    reviewed = sum(
+        1
+        for s in screenings
+        if s.get("reviewed_at")
+    )
 
     k1, k2, k3, k4, k5 = st.columns(5)
 
-
     k1.metric(
-        "👥 Patients",
-        total_patients
+        "Patients",
+        len(patients)
     )
 
-
     k2.metric(
-        "🔬 Screenings",
+        "Screenings",
         total_screenings
     )
 
-
     k3.metric(
-        "⚠️ High/Critical",
+        "High / Critical",
         high_risk
     )
 
-
     k4.metric(
-        "📅 Pending",
+        "Pending Follow-up",
         pending
     )
 
-
     k5.metric(
-        "🤖 Avg Confidence",
-        f"{avg_confidence:.1f}%"
+        "Doctor Reviewed",
+        reviewed
     )
-
 
     if not screenings:
 
         st.info(
-            "No screenings recorded yet."
+            "No screening records available yet."
         )
 
         return
 
-
-    st.divider()
-
-
-    # Tabs
-
-    tab_overview, tab_patients, tab_followup = (
-        st.tabs(
-            [
-                "📊 Overview",
-                "👥 Patient Records",
-                "📅 Follow-up",
-            ]
-        )
+    df = pd.DataFrame(
+        screenings
     )
 
+    tab1, tab2, tab3 = st.tabs(
+        [
+            "📊 Overview",
+            "👥 Screening Records",
+            "🔄 Follow-up",
+        ]
+    )
 
-    # ========================================================================
-    # OVERVIEW
-    # ========================================================================
-
-    with tab_overview:
+    with tab1:
 
         c1, c2 = st.columns(2)
-
 
         with c1:
 
             st.markdown(
-                "<div class='drishti-card'>",
+                '<div class="drishti-card">',
                 unsafe_allow_html=True
             )
 
-
-            st.markdown(
-                "### 🧠 DR Severity Distribution"
+            st.subheader(
+                "DR Classification"
             )
-
 
             st.bar_chart(
-                df[
-                    "dr_class"
-                ].value_counts()
+                df["dr_class"].value_counts()
             )
-
 
             st.markdown(
                 "</div>",
                 unsafe_allow_html=True
             )
-
 
         with c2:
 
             st.markdown(
-                "<div class='drishti-card'>",
+                '<div class="drishti-card">',
                 unsafe_allow_html=True
             )
 
-
-            st.markdown(
-                "### ⚠️ Risk Level Distribution"
+            st.subheader(
+                "Risk Distribution"
             )
-
 
             st.bar_chart(
-                df[
-                    "risk_level"
-                ].value_counts()
+                df["risk_level"].value_counts()
             )
-
 
             st.markdown(
                 "</div>",
                 unsafe_allow_html=True
             )
 
+    with tab2:
 
-        # Screening table
-
-        st.markdown(
-            "<div class='drishti-card'>",
-            unsafe_allow_html=True
+        search = st.text_input(
+            "Search screening records"
         )
 
+        show = df.copy()
 
-        st.markdown(
-            "### 📋 All Screenings"
-        )
+        if search:
 
+            s = search.lower()
 
-        show_df = df[
-            [
-                "patient_code",
-                "patient_name",
-                "age",
-                "dr_class",
-                "confidence",
-                "risk_level",
-                "referral",
-                "followup_status",
-                "screened_by",
-                "screened_at",
+            show = show[
+                show.apply(
+                    lambda row:
+                    s in str(
+                        row.to_dict()
+                    ).lower(),
+                    axis=1
+                )
             ]
+
+        columns = [
+
+            "patient_code",
+            "patient_name",
+            "age",
+            "dr_class",
+            "confidence",
+            "risk_level",
+            "referral",
+            "followup_status",
+            "screened_by",
+            "screened_at",
+
+        ]
+
+        show_df = show[
+            columns
         ].rename(
             columns={
 
@@ -2680,9 +2301,9 @@ def page_dashboard():
 
                 "screened_at":
                     "Screened At",
+
             }
         )
-
 
         st.dataframe(
             show_df,
@@ -2690,264 +2311,71 @@ def page_dashboard():
             hide_index=True
         )
 
+    with tab3:
 
-        st.markdown(
-            "</div>",
-            unsafe_allow_html=True
+        st.subheader(
+            "Follow-up Management"
         )
-
-
-    # ========================================================================
-    # PATIENT RECORDS
-    # ========================================================================
-
-    with tab_patients:
-
-        st.markdown(
-            "<div class='drishti-card'>",
-            unsafe_allow_html=True
-        )
-
-
-        st.markdown(
-            "### 👥 Registered Patients"
-        )
-
-
-        if patients:
-
-            patient_df = pd.DataFrame(
-                patients
-            )
-
-
-            patient_columns = [
-                "patient_code",
-                "name",
-                "age",
-                "diabetes_duration",
-                "previous_screening",
-                "registered_at",
-            ]
-
-
-            available_columns = [
-                c for c in patient_columns
-                if c in patient_df.columns
-            ]
-
-
-            patient_display = (
-                patient_df[
-                    available_columns
-                ]
-                .rename(
-                    columns={
-                        "patient_code":
-                            "Patient ID",
-
-                        "name":
-                            "Name",
-
-                        "age":
-                            "Age",
-
-                        "diabetes_duration":
-                            "Diabetes Duration (Years)",
-
-                        "previous_screening":
-                            "Previous Screening",
-
-                        "registered_at":
-                            "Registered At",
-                    }
-                )
-            )
-
-
-            st.dataframe(
-                patient_display,
-                use_container_width=True,
-                hide_index=True
-            )
-
-        else:
-
-            st.info(
-                "No registered patients."
-            )
-
-
-        st.markdown(
-            "</div>",
-            unsafe_allow_html=True
-        )
-
-
-    # ========================================================================
-    # FOLLOW-UP
-    # ========================================================================
-
-    with tab_followup:
-
-        st.markdown(
-            "<div class='drishti-card'>",
-            unsafe_allow_html=True
-        )
-
-
-        st.markdown(
-            "### 📅 Follow-up Tracking"
-        )
-
-
-        st.caption(
-            "Doctors can update follow-up status "
-            "for screened patients."
-        )
-
 
         for row in screenings:
 
-            with st.container():
+            cols = st.columns(
+                [2, 1.5, 1.5, 2]
+            )
 
-                cols = st.columns(
-                    [
-                        2,
-                        2,
-                        1.5,
-                        1.5,
-                        2,
-                    ]
-                )
+            cols[0].write(
+                f"**{row['patient_name']}** "
+                f"({row['patient_code']})"
+            )
 
+            cols[1].write(
+                row["risk_level"]
+            )
 
-                cols[0].write(
-                    f"**{row['patient_name']}** "
-                    f"({row['patient_code']})"
-                )
+            cols[2].write(
+                row["screened_at"][:10]
+            )
 
+            current = (
+                row["followup_status"]
+            )
 
-                cols[1].write(
-                    row["dr_class"]
-                )
-
-
-                with cols[2]:
-
-                    risk_badge(
-                        row["risk_level"]
-                    )
-
-
-                cols[3].write(
-                    row["screened_at"][:10]
-                )
-
-
-                current_status = row[
-                    "followup_status"
-                ]
-
-
-                new_status = cols[4].selectbox(
-
-                    t(
-                        "followup_status",
-                        lang
-                    ),
-
-                    FOLLOWUP_STATUSES,
-
-                    index=FOLLOWUP_STATUSES.index(
-                        current_status
-                    ),
-
-                    key=f"status_{row['id']}",
-
-                    label_visibility="collapsed",
-
-                    disabled=(
-                        st.session_state.user[
-                            "role"
-                        ]
-                        !=
-                        "Doctor"
-                    ),
-                )
-
-
-                if (
-                    new_status
-                    !=
-                    current_status
-                    and
+            new_status = cols[3].selectbox(
+                "Status",
+                FOLLOWUP_STATUSES,
+                index=FOLLOWUP_STATUSES.index(
+                    current
+                ),
+                key=f"followup_{row['id']}",
+                label_visibility="collapsed",
+                disabled=(
                     st.session_state.user[
                         "role"
-                    ]
-                    ==
-                    "Doctor"
-                ):
+                    ] != "Doctor"
+                )
+            )
 
-                    update_followup_status(
-                        row["id"],
-                        new_status
-                    )
+            if (
+                new_status != current
+                and
+                st.session_state.user[
+                    "role"
+                ] == "Doctor"
+            ):
 
+                update_followup_status(
+                    row["id"],
+                    new_status
+                )
 
-                    st.success(
-                        "Follow-up status updated."
-                    )
-
-
-                    st.rerun()
-
-
-            st.divider()
+                st.rerun()
 
 
-        st.markdown(
-            "</div>",
-            unsafe_allow_html=True
-        )
-
-
-# ============================================================================
-# FOOTER
-# ============================================================================
-
-def show_footer():
-
-    st.markdown(
-        """
-        <div class="drishti-footer">
-
-            <strong>
-                DRISHTI-XAI
-            </strong>
-            · Explainable AI Diabetic Retinopathy Screening
-
-            <br>
-
-            SIH 2026 Prototype ·
-            AI-assisted screening only ·
-            Not a certified medical device
-
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-
-
-# ============================================================================
-# ROUTER
-# ============================================================================
+# ============================================================
+# MAIN ROUTER
+# ============================================================
 
 def main():
-
-    # ------------------------------------------------------------------------
-    # Login
-    # ------------------------------------------------------------------------
 
     if not st.session_state.logged_in:
 
@@ -2955,46 +2383,26 @@ def main():
 
         return
 
-
-    # ------------------------------------------------------------------------
-    # Sidebar
-    # ------------------------------------------------------------------------
-
     sidebar_nav()
-
-
-    # ------------------------------------------------------------------------
-    # Page routing
-    # ------------------------------------------------------------------------
 
     page = st.session_state.page
 
-
-    if page == "Dashboard":
-
-        page_home()
-
-
-    elif page == "Register":
+    if page == "Register":
 
         page_register()
-
 
     elif page == "Screening":
 
         page_screening()
 
+    elif page == "Doctor Review":
 
-    # ------------------------------------------------------------------------
-    # Footer
-    # ------------------------------------------------------------------------
+        page_doctor_review()
 
-    show_footer()
+    elif page == "Dashboard":
 
+        page_dashboard()
 
-# ============================================================================
-# ENTRY POINT
-# ============================================================================
 
 if __name__ == "__main__":
 
