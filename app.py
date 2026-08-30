@@ -229,27 +229,141 @@ def build_report_html(row):
     return html
 
 
+def build_report_pdf(row):
+    """
+    Builds the same report as a PDF using fpdf2 (pure-Python, no system
+    dependencies like wkhtmltopdf/Chromium required). Returns raw PDF bytes.
+    Requires "fpdf2" to be added to requirements.txt.
+    """
+    from fpdf import FPDF  # local import so the app still runs if fpdf2 isn't installed yet
+
+    patient_code = row.get("patient_code", "N/A")
+    patient_name = row.get("patient_name", "N/A")
+    age = row.get("age", "N/A")
+    diabetes_duration = row.get("diabetes_duration", "N/A")
+    previous_screening = row.get("previous_screening", "N/A")
+    dr_class = row.get("dr_class", "N/A")
+    confidence = row.get("confidence", "N/A")
+    risk_level = row.get("risk_level", "N/A")
+    referral = row.get("referral", "N/A")
+    followup_status = row.get("followup_status", "N/A")
+    screened_by = row.get("screened_by", "N/A")
+    screened_at = row.get("screened_at", "N/A")
+    rationale = row.get("rationale")
+
+    pdf = FPDF(format="A4", unit="mm")
+    pdf.set_auto_page_break(auto=True, margin=18)
+    pdf.add_page()
+
+    pdf.set_text_color(16, 36, 62)
+    pdf.set_font("Helvetica", "B", 20)
+    pdf.cell(0, 12, "DRISHTI-XAI", ln=1)
+    pdf.set_text_color(96, 125, 139)
+    pdf.set_font("Helvetica", "", 11)
+    pdf.cell(0, 7, "Explainable AI Diabetic Retinopathy Screening for Rural India", ln=1)
+    pdf.ln(4)
+
+    def section(title):
+        pdf.set_text_color(11, 114, 133)
+        pdf.set_font("Helvetica", "B", 13)
+        pdf.cell(0, 9, title, ln=1)
+        pdf.set_draw_color(227, 232, 239)
+        pdf.line(pdf.get_x(), pdf.get_y(), 200, pdf.get_y())
+        pdf.ln(3)
+        pdf.set_text_color(16, 36, 62)
+
+    def field(label, value):
+        pdf.set_font("Helvetica", "B", 11)
+        pdf.cell(58, 7, label)
+        pdf.set_font("Helvetica", "", 11)
+        pdf.multi_cell(0, 7, str(value))
+
+    section("Patient Information")
+    field("Patient ID:", patient_code)
+    field("Name:", patient_name)
+    field("Age:", age)
+    field("Diabetes Duration:", diabetes_duration)
+    field("Previous Screening:", previous_screening)
+    pdf.ln(3)
+
+    section("Screening Result")
+    field("Screened At:", screened_at)
+    field("Screened By:", screened_by)
+    field("DR Class:", dr_class)
+    field("AI Confidence:", f"{confidence}%")
+    field("Risk Level:", risk_level)
+    field("Referral Recommendation:", referral)
+    pdf.ln(3)
+
+    if rationale:
+        section("Risk Rationale")
+        pdf.set_font("Helvetica", "", 11)
+        if isinstance(rationale, (list, tuple)):
+            for line in rationale:
+                pdf.multi_cell(0, 7, f"-  {line}")
+        else:
+            pdf.multi_cell(0, 7, str(rationale))
+        pdf.ln(3)
+
+    section("Follow-up Status")
+    pdf.set_font("Helvetica", "", 11)
+    pdf.multi_cell(0, 7, str(followup_status))
+    pdf.ln(5)
+
+    pdf.set_fill_color(255, 247, 230)
+    pdf.set_draw_color(255, 217, 142)
+    pdf.set_text_color(138, 90, 0)
+    pdf.set_font("Helvetica", "I", 9)
+    disclaimer = (
+        "PROTOTYPE - AI-assisted screening aid only. Not a certified medical diagnostic "
+        "device and not an official medical certificate. Clinical decisions must be made "
+        "by a qualified specialist."
+    )
+    pdf.multi_cell(0, 6, disclaimer, border=1, fill=True)
+
+    pdf.set_text_color(144, 164, 174)
+    pdf.set_font("Helvetica", "", 8)
+    pdf.ln(3)
+    pdf.cell(0, 6, f"Report generated on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} by DRISHTI-XAI.")
+
+    return bytes(pdf.output())
+
+
 def render_report_actions(row, key_prefix="report"):
-    """Renders a Print button and a Download button for a screening's report."""
+    """Renders Print, Download-HTML, and Download-PDF actions for a screening's report."""
     html = build_report_html(row)
-    col_print, col_download = st.columns(2)
+    col_print, col_html, col_pdf = st.columns(3)
 
     with col_print:
         if st.button("🖨️ Print Report", key=f"{key_prefix}_print_{row.get('id')}", use_container_width=True):
             st.caption("Print preview below — use your browser's print dialog (Ctrl/Cmd+P) or the "
-                       "button inside the preview.")
+                       "button inside the preview. Choosing 'Save as PDF' there also works.")
             components.html(html + "<script>window.print();</script>", height=500, scrolling=True)
 
-    with col_download:
+    with col_html:
         b64 = base64.b64encode(html.encode("utf-8")).decode()
         st.markdown(
             f'<a download="drishti_report_{row.get("patient_code","patient")}.html" '
             f'href="data:text/html;base64,{b64}" '
             f'style="display:inline-block;width:100%;text-align:center;padding:0.5rem 1rem;'
             f'background:#0B7285;color:white;border-radius:8px;text-decoration:none;font-weight:600;">'
-            f'⬇️ Download Report (.html)</a>',
+            f'⬇️ Download HTML</a>',
             unsafe_allow_html=True,
         )
+
+    with col_pdf:
+        try:
+            pdf_bytes = build_report_pdf(row)
+            st.download_button(
+                "⬇️ Download PDF",
+                data=pdf_bytes,
+                file_name=f"drishti_report_{row.get('patient_code','patient')}.pdf",
+                mime="application/pdf",
+                key=f"{key_prefix}_pdf_{row.get('id')}",
+                use_container_width=True,
+            )
+        except ImportError:
+            st.caption("⚠️ PDF export needs `fpdf2`. Add `fpdf2` to requirements.txt and reinstall.")
 
 
 # ---------------------------------------------------------------------------
