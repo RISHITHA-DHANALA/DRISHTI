@@ -229,6 +229,21 @@ def build_report_html(row):
     return html
 
 
+def _pdf_safe(value):
+    """
+    fpdf2's built-in core fonts (Helvetica) only support Latin-1. If a name or
+    field contains non-Latin characters (Hindi/Tamil/etc. from the language
+    picker), encode-and-replace so the PDF never crashes — worst case those
+    characters render as '?'.
+    """
+    text = "" if value is None else str(value)
+    try:
+        text.encode("latin-1")
+        return text
+    except UnicodeEncodeError:
+        return text.encode("latin-1", "replace").decode("latin-1")
+
+
 def build_report_pdf(row):
     """
     Builds the same report as a PDF using fpdf2 (pure-Python, no system
@@ -237,18 +252,18 @@ def build_report_pdf(row):
     """
     from fpdf import FPDF  # local import so the app still runs if fpdf2 isn't installed yet
 
-    patient_code = row.get("patient_code", "N/A")
-    patient_name = row.get("patient_name", "N/A")
-    age = row.get("age", "N/A")
-    diabetes_duration = row.get("diabetes_duration", "N/A")
-    previous_screening = row.get("previous_screening", "N/A")
-    dr_class = row.get("dr_class", "N/A")
-    confidence = row.get("confidence", "N/A")
-    risk_level = row.get("risk_level", "N/A")
-    referral = row.get("referral", "N/A")
-    followup_status = row.get("followup_status", "N/A")
-    screened_by = row.get("screened_by", "N/A")
-    screened_at = row.get("screened_at", "N/A")
+    patient_code = _pdf_safe(row.get("patient_code", "N/A"))
+    patient_name = _pdf_safe(row.get("patient_name", "N/A"))
+    age = _pdf_safe(row.get("age", "N/A"))
+    diabetes_duration = _pdf_safe(row.get("diabetes_duration", "N/A"))
+    previous_screening = _pdf_safe(row.get("previous_screening", "N/A"))
+    dr_class = _pdf_safe(row.get("dr_class", "N/A"))
+    confidence = _pdf_safe(row.get("confidence", "N/A"))
+    risk_level = _pdf_safe(row.get("risk_level", "N/A"))
+    referral = _pdf_safe(row.get("referral", "N/A"))
+    followup_status = _pdf_safe(row.get("followup_status", "N/A"))
+    screened_by = _pdf_safe(row.get("screened_by", "N/A"))
+    screened_at = _pdf_safe(row.get("screened_at", "N/A"))
     rationale = row.get("rationale")
 
     pdf = FPDF(format="A4", unit="mm")
@@ -257,26 +272,37 @@ def build_report_pdf(row):
 
     pdf.set_text_color(16, 36, 62)
     pdf.set_font("Helvetica", "B", 20)
-    pdf.cell(0, 12, "DRISHTI-XAI", ln=1)
+    pdf.cell(0, 12, "DRISHTI-XAI", new_x="LMARGIN", new_y="NEXT")
     pdf.set_text_color(96, 125, 139)
     pdf.set_font("Helvetica", "", 11)
-    pdf.cell(0, 7, "Explainable AI Diabetic Retinopathy Screening for Rural India", ln=1)
+    pdf.cell(0, 7, "Explainable AI Diabetic Retinopathy Screening for Rural India",
+             new_x="LMARGIN", new_y="NEXT")
     pdf.ln(4)
 
     def section(title):
+        pdf.set_x(pdf.l_margin)
         pdf.set_text_color(11, 114, 133)
         pdf.set_font("Helvetica", "B", 13)
-        pdf.cell(0, 9, title, ln=1)
+        pdf.cell(0, 9, title, new_x="LMARGIN", new_y="NEXT")
         pdf.set_draw_color(227, 232, 239)
-        pdf.line(pdf.get_x(), pdf.get_y(), 200, pdf.get_y())
+        pdf.line(pdf.l_margin, pdf.get_y(), pdf.w - pdf.r_margin, pdf.get_y())
         pdf.ln(3)
         pdf.set_text_color(16, 36, 62)
 
     def field(label, value):
+        # Always reset to the left margin first so a value that wraps to
+        # multiple lines (or renders zero lines) can never leave the cursor
+        # drifting rightward into the next field — that drift is what causes
+        # fpdf2's "Not enough horizontal space" crash.
+        pdf.set_x(pdf.l_margin)
         pdf.set_font("Helvetica", "B", 11)
-        pdf.cell(58, 7, label)
+        pdf.cell(58, 7, label, new_x="RIGHT", new_y="TOP")
         pdf.set_font("Helvetica", "", 11)
-        pdf.multi_cell(0, 7, str(value))
+        value_width = (pdf.w - pdf.r_margin) - pdf.get_x()
+        if value_width < 20:
+            value_width = pdf.w - pdf.l_margin - pdf.r_margin - 58
+        text = value if value not in ("", None) else "-"
+        pdf.multi_cell(value_width, 7, text, new_x="LMARGIN", new_y="NEXT")
 
     section("Patient Information")
     field("Patient ID:", patient_code)
@@ -297,19 +323,23 @@ def build_report_pdf(row):
 
     if rationale:
         section("Risk Rationale")
+        pdf.set_x(pdf.l_margin)
         pdf.set_font("Helvetica", "", 11)
         if isinstance(rationale, (list, tuple)):
             for line in rationale:
-                pdf.multi_cell(0, 7, f"-  {line}")
+                pdf.set_x(pdf.l_margin)
+                pdf.multi_cell(0, 7, _pdf_safe(f"-  {line}"), new_x="LMARGIN", new_y="NEXT")
         else:
-            pdf.multi_cell(0, 7, str(rationale))
+            pdf.multi_cell(0, 7, _pdf_safe(rationale), new_x="LMARGIN", new_y="NEXT")
         pdf.ln(3)
 
     section("Follow-up Status")
+    pdf.set_x(pdf.l_margin)
     pdf.set_font("Helvetica", "", 11)
-    pdf.multi_cell(0, 7, str(followup_status))
+    pdf.multi_cell(0, 7, followup_status, new_x="LMARGIN", new_y="NEXT")
     pdf.ln(5)
 
+    pdf.set_x(pdf.l_margin)
     pdf.set_fill_color(255, 247, 230)
     pdf.set_draw_color(255, 217, 142)
     pdf.set_text_color(138, 90, 0)
@@ -319,11 +349,12 @@ def build_report_pdf(row):
         "device and not an official medical certificate. Clinical decisions must be made "
         "by a qualified specialist."
     )
-    pdf.multi_cell(0, 6, disclaimer, border=1, fill=True)
+    pdf.multi_cell(0, 6, disclaimer, border=1, fill=True, new_x="LMARGIN", new_y="NEXT")
 
     pdf.set_text_color(144, 164, 174)
     pdf.set_font("Helvetica", "", 8)
     pdf.ln(3)
+    pdf.set_x(pdf.l_margin)
     pdf.cell(0, 6, f"Report generated on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} by DRISHTI-XAI.")
 
     return bytes(pdf.output())
