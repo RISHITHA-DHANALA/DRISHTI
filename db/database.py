@@ -1,13 +1,15 @@
-
 """
 db/database.py
 ---------------
 Lightweight SQLite persistence layer for the prototype.
 
 Tables:
-    users       - login accounts (health workers / doctors)
-    patients    - registered patients
-    screenings  - one row per fundus image screening event
+    users         - login accounts (health workers / doctors)
+    patients      - registered patients
+    screenings    - one row per fundus image screening event
+    doctor_notes  - doctor's suggestions / smart-referral confirmation,
+                    one row per screening (added — does not affect any
+                    existing table or data)
 
 All functions open/close their own connection (simple & safe for a
 Streamlit single-process prototype; swap for a connection pool /
@@ -37,7 +39,7 @@ def _hash_password(password: str) -> str:
 
 
 def init_db():
-    """Create tables if they don't exist and seed demo users."""
+    """Create tables if they don't exist and seed demo users. Never drops data."""
     conn = _connect()
     cur = conn.cursor()
 
@@ -78,6 +80,22 @@ def init_db():
             screened_by TEXT,
             screened_at TEXT NOT NULL,
             FOREIGN KEY(patient_id) REFERENCES patients(id)
+        )
+    """)
+
+    # --- NEW: doctor suggestions / smart-referral confirmation ----------------
+    # One row per screening. Added with CREATE TABLE IF NOT EXISTS so it is
+    # 100% safe to run against a database that already has patients/screenings.
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS doctor_notes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            screening_id INTEGER UNIQUE NOT NULL,
+            doctor_name TEXT,
+            recommendation TEXT,
+            referral_override TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(screening_id) REFERENCES screenings(id)
         )
     """)
 
@@ -161,18 +179,50 @@ def add_screening(patient_id, image_path, dr_class, confidence, risk_level,
 
 
 def get_screenings():
-    """Return all screenings joined with patient info, newest first."""
+    """
+    Return all screenings joined with patient info AND (if present) the
+    doctor's suggestion / smart-referral override, newest first.
+    A screening with no doctor note yet simply gets NULLs for those columns
+    (LEFT JOIN), so this is fully backward compatible.
+    """
     conn = _connect()
     cur = conn.cursor()
     cur.execute("""
-        SELECT s.*, p.patient_code, p.name AS patient_name, p.age, p.diabetes_duration
+        SELECT s.*,
+               p.patient_code, p.name AS patient_name, p.age, p.diabetes_duration,
+               dn.doctor_name        AS reviewing_doctor,
+               dn.recommendation     AS doctor_recommendation,
+               dn.referral_override  AS doctor_referral_override,
+               dn.updated_at         AS doctor_note_updated_at
         FROM screenings s
         JOIN patients p ON s.patient_id = p.id
+        LEFT JOIN doctor_notes dn ON dn.screening_id = s.id
         ORDER BY s.screened_at DESC
     """)
     rows = [dict(r) for r in cur.fetchall()]
     conn.close()
     return rows
+
+
+def get_screening_by_id(screening_id):
+    """Single screening (with patient + doctor note info), used by the review panel."""
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT s.*,
+               p.patient_code, p.name AS patient_name, p.age, p.diabetes_duration,
+               dn.doctor_name        AS reviewing_doctor,
+               dn.recommendation     AS doctor_recommendation,
+               dn.referral_override  AS doctor_referral_override,
+               dn.updated_at         AS doctor_note_updated_at
+        FROM screenings s
+        JOIN patients p ON s.patient_id = p.id
+        LEFT JOIN doctor_notes dn ON dn.screening_id = s.id
+        WHERE s.id = ?
+    """, (screening_id,))
+    row = cur.fetchone()
+    conn.close()
+    return dict(row) if row else None
 
 
 def update_followup_status(screening_id, status):
@@ -181,3 +231,43 @@ def update_followup_status(screening_id, status):
     cur.execute("UPDATE screenings SET followup_status = ? WHERE id = ?", (status, screening_id))
     conn.commit()
     conn.close()
+
+
+# ---------------------------------------------------------------------------
+# NEW: Doctor suggestions / Smart Referral confirmation
+# ---------------------------------------------------------------------------
+def add_doctor_recommendation(screening_id, doctor_name, recommendation, referral_override=None):
+    """
+    Upserts the doctor's note for a screening — one screening has at most one
+    note; saving again updates it in place rather than duplicating rows.
+    """
+    conn = _connect()
+    cur = conn.cursor()
+    now = datetime.datetime.now().isoformat(timespec="seconds")
+    cur.execute("SELECT id FROM doctor_notes WHERE screening_id = ?", (screening_id,))
+    existing = cur.fetchone()
+    if existing:
+        cur.execute(
+            """UPDATE doctor_notes
+               SET doctor_name = ?, recommendation = ?, referral_override = ?, updated_at = ?
+               WHERE screening_id = ?""",
+            (doctor_name, recommendation, referral_override, now, screening_id),
+        )
+    else:
+        cur.execute(
+            """INSERT INTO doctor_notes
+               (screening_id, doctor_name, recommendation, referral_override, created_at, updated_at)
+               VALUES (?,?,?,?,?,?)""",
+            (screening_id, doctor_name, recommendation, referral_override, now, now),
+        )
+    conn.commit()
+    conn.close()
+
+
+def get_doctor_recommendation(screening_id):
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM doctor_notes WHERE screening_id = ?", (screening_id,))
+    row = cur.fetchone()
+    conn.close()
+    return dict(row) if row else None
