@@ -38,6 +38,7 @@ from i18n.translations import t  # noqa: E402
 from db.database import (  # noqa: E402
     init_db, authenticate, add_patient, get_patients, get_patient_by_id,
     add_screening, get_screenings, update_followup_status,
+    get_screening_by_id, add_doctor_recommendation, get_doctor_recommendation,
 )
 from core.image_quality import check_image_quality  # noqa: E402
 from core.model import DRModel  # noqa: E402
@@ -140,6 +141,41 @@ def reset_workflow():
 
 
 # ---------------------------------------------------------------------------
+# Explainable AI — plain-language Grad-CAM explanation
+# ---------------------------------------------------------------------------
+def build_xai_explanation(dr_class, risk_level):
+    """
+    Turns the DR class + risk level into a short, plain-language explanation
+    of what the Grad-CAM heatmap is showing. This is UI-level copy only — it
+    does not change or reinterpret anything the model/risk engine computed.
+    """
+    base = (
+        "The highlighted (warm-colored) regions in the heatmap show the areas of the "
+        "retina that most influenced the AI's prediction — typically signs such as "
+        "hemorrhages, exudates, or microaneurysms associated with diabetic retinopathy."
+    )
+    risk_notes = {
+        "Low": "The model found few concerning regions, consistent with a low-risk "
+               "classification. Continue routine annual screening.",
+        "Moderate": "The model flagged some early warning signs. Closer monitoring and "
+                    "a follow-up screening are advisable.",
+        "High": "The model detected a significant area of concern. A specialist review "
+                "is recommended soon.",
+        "Critical": "The model detected extensive changes across the retina. Urgent "
+                    "specialist referral is recommended.",
+    }
+    risk_note = risk_notes.get(
+        str(risk_level),
+        "Review the highlighted regions together with the referral recommendation below.",
+    )
+    return (
+        f"{base} DR class detected: **{dr_class}**. {risk_note} "
+        f"This is an AI-generated explanation aid, not a clinical diagnosis — "
+        f"final interpretation must be made by a qualified doctor."
+    )
+
+
+# ---------------------------------------------------------------------------
 # Report generation (print / download)
 # ---------------------------------------------------------------------------
 def build_report_html(row):
@@ -167,6 +203,23 @@ def build_report_html(row):
             rationale_html = "<ul>" + "".join(f"<li>{r}</li>" for r in rationale) + "</ul>"
         else:
             rationale_html = f"<p>{rationale}</p>"
+
+    # Doctor's suggestion / smart-referral override, if a doctor has reviewed this screening.
+    reviewing_doctor = row.get("reviewing_doctor")
+    doctor_recommendation = row.get("doctor_recommendation")
+    doctor_referral_override = row.get("doctor_referral_override")
+    doctor_note_updated_at = row.get("doctor_note_updated_at")
+
+    doctor_section_html = "<p><i>No doctor suggestion recorded yet for this screening.</i></p>"
+    if reviewing_doctor or doctor_recommendation or doctor_referral_override:
+        doctor_section_html = f"""
+        <p><b>Reviewing Doctor:</b> {reviewing_doctor or 'N/A'}</p>
+        <p><b>Doctor's Suggestion:</b><br>{(doctor_recommendation or 'N/A').replace(chr(10), '<br>')}</p>
+        <p><b>Doctor's Referral Decision:</b> {doctor_referral_override or '(confirms AI Smart Referral above)'}</p>
+        <p><b>Last Updated:</b> {doctor_note_updated_at or 'N/A'}</p>
+        """
+
+    xai_text = build_xai_explanation(dr_class, risk_level).replace("**", "")
 
     generated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -210,9 +263,21 @@ def build_report_html(row):
             <tr><td class="label">DR Class</td><td>{dr_class}</td></tr>
             <tr><td class="label">AI Confidence</td><td>{confidence}%</td></tr>
             <tr><td class="label">Risk Level</td><td>{risk_level}</td></tr>
-            <tr><td class="label">Referral Recommendation</td><td>{referral}</td></tr>
         </table>
         {f"<h2>Risk Rationale</h2>{rationale_html}" if rationale_html else ""}
+
+        <h2>🎯 Smart Referral</h2>
+        <p style="background:#E8F6F7;border-left:4px solid #008C95;padding:10px 14px;border-radius:6px;">
+            <b>AI Recommendation:</b> {referral}
+        </p>
+
+        <h2>💡 Explainable AI</h2>
+        <p style="background:#F5F9FA;border-left:4px solid #607D8B;padding:10px 14px;border-radius:6px;">
+            {xai_text}
+        </p>
+
+        <h2>🩺 Doctor's Suggestion</h2>
+        {doctor_section_html}
 
         <h2>Follow-up Status</h2>
         <p>{followup_status}</p>
@@ -266,6 +331,14 @@ def build_report_pdf(row):
     screened_at = _pdf_safe(row.get("screened_at", "N/A"))
     rationale = row.get("rationale")
 
+    reviewing_doctor = row.get("reviewing_doctor")
+    doctor_recommendation = row.get("doctor_recommendation")
+    doctor_referral_override = row.get("doctor_referral_override")
+    doctor_note_updated_at = row.get("doctor_note_updated_at")
+    has_doctor_note = bool(reviewing_doctor or doctor_recommendation or doctor_referral_override)
+
+    xai_text = _pdf_safe(build_xai_explanation(row.get("dr_class", "N/A"), risk_level).replace("**", ""))
+
     pdf = FPDF(format="A4", unit="mm")
     pdf.set_auto_page_break(auto=True, margin=18)
     pdf.add_page()
@@ -318,7 +391,6 @@ def build_report_pdf(row):
     field("DR Class:", dr_class)
     field("AI Confidence:", f"{confidence}%")
     field("Risk Level:", risk_level)
-    field("Referral Recommendation:", referral)
     pdf.ln(3)
 
     if rationale:
@@ -332,6 +404,33 @@ def build_report_pdf(row):
         else:
             pdf.multi_cell(0, 7, _pdf_safe(rationale), new_x="LMARGIN", new_y="NEXT")
         pdf.ln(3)
+
+    section("Smart Referral (AI Recommendation)")
+    pdf.set_x(pdf.l_margin)
+    pdf.set_fill_color(232, 246, 247)
+    pdf.set_font("Helvetica", "", 11)
+    pdf.multi_cell(0, 7, referral, border=0, fill=True, new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(3)
+
+    section("Explainable AI")
+    pdf.set_x(pdf.l_margin)
+    pdf.set_fill_color(245, 249, 250)
+    pdf.set_font("Helvetica", "", 10)
+    pdf.multi_cell(0, 6, xai_text, border=0, fill=True, new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(3)
+
+    section("Doctor's Suggestion")
+    pdf.set_x(pdf.l_margin)
+    pdf.set_font("Helvetica", "", 11)
+    if has_doctor_note:
+        field("Reviewing Doctor:", _pdf_safe(reviewing_doctor or "N/A"))
+        field("Suggestion:", _pdf_safe(doctor_recommendation or "N/A"))
+        field("Referral Decision:", _pdf_safe(doctor_referral_override or "(confirms AI Smart Referral above)"))
+        field("Last Updated:", _pdf_safe(doctor_note_updated_at or "N/A"))
+    else:
+        pdf.multi_cell(0, 7, "No doctor suggestion recorded yet for this screening.",
+                        new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(3)
 
     section("Follow-up Status")
     pdf.set_x(pdf.l_margin)
@@ -645,15 +744,27 @@ def page_screening():
         st.image(bgr_to_rgb(st.session_state.wf_heatmap), caption=t("gradcam_caption", lang), use_container_width=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
-    # --- Step 4: Risk & referral --------------------------------------------
+    # --- Explainable AI — plain language panel -------------------------------
+    st.markdown("<div class='drishti-card'>", unsafe_allow_html=True)
+    st.markdown("#### 💡 Explainable AI — What am I looking at?")
+    xai_text = build_xai_explanation(prediction["dr_class"], st.session_state.wf_risk["risk_level"]
+                                      if st.session_state.wf_risk else "N/A")
+    st.markdown(xai_text)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # --- Step 4: Risk & Smart Referral ---------------------------------------
     risk = st.session_state.wf_risk
     st.markdown("<div class='drishti-card'>", unsafe_allow_html=True)
-    st.markdown(f"#### {t('risk_level', lang)} & {t('referral', lang)}")
+    st.markdown(f"#### {t('risk_level', lang)} & 🎯 Smart Referral")
     c1, c2 = st.columns([1, 2])
     with c1:
         risk_badge(risk["risk_level"])
     with c2:
-        st.write(f"**{t('referral', lang)}:** {risk['referral']}")
+        st.markdown(
+            f"<div style='background:#E8F6F7;border-left:4px solid #008C95;"
+            f"padding:8px 12px;border-radius:6px;'><b>AI Recommendation:</b> {risk['referral']}</div>",
+            unsafe_allow_html=True,
+        )
     with st.expander("Why this risk level? (rationale)"):
         for line in risk["rationale"]:
             st.write(f"- {line}")
@@ -751,6 +862,69 @@ def page_dashboard():
         })
         st.dataframe(show_df, use_container_width=True, hide_index=True)
         st.markdown("</div>", unsafe_allow_html=True)
+
+        # --- Doctor Review: Smart Referral + Doctor's Suggestion (Doctor only) ---
+        if st.session_state.user["role"] == "Doctor":
+            st.markdown("<div class='drishti-card'>", unsafe_allow_html=True)
+            st.markdown("##### 🩺 Doctor Review — Smart Referral & Suggestions")
+            review_labels = {
+                f"{row['patient_code']} — {row['patient_name']} — {row['screened_at']}": row["id"]
+                for row in screenings
+            }
+            chosen_review_label = st.selectbox(
+                "Select a patient's screening to review", list(review_labels.keys()), key="review_select"
+            )
+            review_screening_id = review_labels[chosen_review_label]
+            screening = get_screening_by_id(review_screening_id)
+
+            c1, c2 = st.columns([1, 2])
+            with c1:
+                st.markdown(f"**DR Class:** {screening['dr_class']}")
+                risk_badge(screening["risk_level"])
+            with c2:
+                st.markdown(
+                    f"<div style='background:#E8F6F7;border-left:4px solid #008C95;"
+                    f"padding:8px 12px;border-radius:6px;'>"
+                    f"<b>🎯 AI Smart Referral:</b> {screening['referral']}</div>",
+                    unsafe_allow_html=True,
+                )
+
+            st.markdown(
+                f"<div style='background:#F5F9FA;border-left:4px solid #607D8B;"
+                f"padding:8px 12px;border-radius:6px;margin-top:8px;'>"
+                f"💡 {build_xai_explanation(screening['dr_class'], screening['risk_level'])}</div>",
+                unsafe_allow_html=True,
+            )
+
+            existing_note = get_doctor_recommendation(review_screening_id)
+            st.markdown("###### Doctor's Suggestion")
+            recommendation = st.text_area(
+                "Notes / suggestions for this patient",
+                value=(existing_note["recommendation"] if existing_note else ""),
+                key=f"rec_{review_screening_id}",
+                height=110,
+            )
+            referral_override = st.text_input(
+                "Referral decision (leave blank to simply confirm the AI's Smart Referral above)",
+                value=(existing_note["referral_override"] if existing_note and existing_note["referral_override"] else ""),
+                key=f"ref_override_{review_screening_id}",
+            )
+
+            if existing_note:
+                st.caption(
+                    f"Last updated {existing_note['updated_at']} by {existing_note['doctor_name']}."
+                )
+
+            if st.button("💾 Save Doctor Suggestion", key=f"save_note_{review_screening_id}", use_container_width=True):
+                add_doctor_recommendation(
+                    screening_id=review_screening_id,
+                    doctor_name=st.session_state.user["display_name"],
+                    recommendation=recommendation,
+                    referral_override=referral_override or None,
+                )
+                st.success("✓ Doctor suggestion saved.")
+                st.rerun()
+            st.markdown("</div>", unsafe_allow_html=True)
 
         # --- Print / Download report for any screening -----------------------
         st.markdown("<div class='drishti-card'>", unsafe_allow_html=True)
